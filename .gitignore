@@ -1,9 +1,9 @@
 .venv/
 
-data/
-results/
-logs/
-external/
+/data/
+/results/
+/logs/
+/external/
 *.pdb
 *.cif
 __pycache__/

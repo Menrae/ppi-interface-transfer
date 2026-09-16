@@ -20,33 +20,55 @@ no GPU) recovers some of the lost accuracy.
 
 ## 2. Phases
 
-### Phase 1 — Candidate complex selection
-- **Inputs:** RCSB Search API (REST, live query); SIFTS PDB↔UniProt segment
-  mapping (bulk file, e.g. `pdb_chain_uniprot.tsv.gz` from EBI).
+### Phase 1 — Candidate complex selection — **DONE** (2026-09-16)
+
+Implemented as a single module rather than the three sketched below —
+`src/data/select_complexes.py` covers search, entry/entity fetch, SIFTS
+cross-check, and filtering together, since none of the pieces were reused
+elsewhere. Output paths and cache layout also ended up simpler than
+originally sketched; both are corrected below to match what actually
+exists on disk.
+
+- **Inputs:** RCSB Search API v2 (REST, live query); RCSB Data API (REST,
+  per-entry and per-polymer-entity); SIFTS PDB↔UniProt bulk file
+  (`pdb_chain_uniprot.tsv.gz` from the EBI SIFTS FTP site).
 - **Config used:** `RESOLUTION_CUTOFF_ANGSTROM` (2.5), `PDB_RELEASE_DATE_CUTOFF`
   (2018-04-30) — see confound (a); candidates are filtered to
   `initial_release_date > PDB_RELEASE_DATE_CUTOFF` (RCSB
   `rcsb_accession_info.initial_release_date`, **not** deposit date — AF2's
-  training cutoff is a release-date cutoff) to reduce AF2 memorization risk.
-- **Outputs:**
-  - `data/raw/rcsb_search/query_<hash>.json` (cached raw API response)
-  - `data/raw/sifts/pdb_chain_uniprot.tsv.gz` (cached bulk file, chain-level
-    lookups only — see Phase 4 for residue-level mapping)
-  - `data/interim/candidate_complexes.parquet` — columns: `pdb_id`, `chain_id`,
-    `entity_id`, `uniprot_acc`, `resolution`, `initial_release_date`,
-    `n_protein_entities`, `has_nucleic_acid`
-- **src modules:** `src/data/rcsb_search.py`, `src/data/sifts.py`,
-  `src/pipeline/select_candidates.py`
-- **Tests:** `tests/test_rcsb_search.py` (query JSON embeds config cutoffs,
-  not literals; mocked response parsed correctly), `tests/test_sifts.py`
-  (mapping parser on a small fixture), `tests/test_select_candidates.py`
-  (entries with a nucleic-acid entity or <2 distinct protein entities are
-  excluded and the drop is logged with a reason)
-- **Success criterion:** query executes, cache file is non-empty,
-  100% of retained rows satisfy resolution ≤ 2.5 Å, release date >
-  2018-04-30, ≥2 UniProt-mapped protein chains, 0 nucleic-acid entities.
-  Actual retained count is logged; if it's under ~200 complexes, flag before
-  continuing to Phase 2 (see confound (e)).
+  training cutoff is a release-date cutoff) to reduce AF2 memorization risk;
+  `MAX_PROTEIN_ENTITIES` (10) bounds entry complexity; `MIN_CHAIN_LENGTH`
+  (40) drops peptide fragments (both added to `src/config.py` this phase).
+- **Outputs (actual):**
+  - `data/raw/rcsb/search/<query_hash>/page_start<N>.json` (cached search
+    pages, one per 100-row page)
+  - `data/raw/rcsb/entries/{pdb_id}.json`, `data/raw/rcsb/polymer_entities/{pdb_id}_{entity_id}.json`
+    (cached Data API responses, one file per entry/entity)
+  - `data/raw/sifts/pdb_chain_uniprot.tsv.gz` (cached bulk file)
+  - `data/interim/candidates.csv` — one row per surviving protein chain:
+    `pdb_id`, `release_date`, `resolution`, `n_protein_entities`,
+    `entity_id`, `chain_id`, `seq_length`, `polymer_type`, `uniprot_ids`
+    (`;`-joined), `n_uniprot_ids`, `sifts_uniprot_ids`, `sifts_agrees`
+  - `data/interim/phase1_attrition.csv` — chain-level filter attrition
+    (`stage`, `n_before`, `n_dropped`, `n_remaining`, `note`)
+  - `logs/select_complexes.log` — full DEBUG-level log incl. every dropped
+    chain's reason and every SIFTS disagreement
+- **src modules:** `src/data/select_complexes.py` (search query builder,
+  paginated search, entry/entity fetch+parse, SIFTS load+cross-check, chain
+  filters, CLI).
+- **Tests:** `tests/test_select_complexes.py` (11 tests, all passing,
+  no network) — query builder reads config not literals; entry/entity
+  parsing on fixture JSON in `tests/fixtures/`; SIFTS mapping load +
+  agreement/disagreement cross-check; each chain filter individually
+  (including a chimera case and a short-chain case) plus the combined
+  pipeline's attrition bookkeeping.
+- **Success criterion:** met on the first live run (`--max-entries 500`,
+  2026-09-16): 500/500 entries fetched (0 fetch errors, 0 local
+  sanity-check failures — i.e. 100% of fetched entries satisfied the
+  resolution/release-date cutoffs), 1275 candidate chains across 473
+  entries, 160 unique UniProt accessions written to `data/interim/candidates.csv`.
+  Comfortably over the ~200-complex flag threshold. Full attrition and
+  distribution numbers are in `PROGRESS.md`.
 
 ### Phase 2 — Redundancy reduction + PeSTo-overlap flagging (sequence-level)
 

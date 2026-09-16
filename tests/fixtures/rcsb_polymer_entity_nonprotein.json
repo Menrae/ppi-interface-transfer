@@ -1,0 +1,13 @@
+{
+  "entity_poly": {
+    "rcsb_entity_polymer_type": "Other",
+    "rcsb_sample_sequence_length": 50,
+    "type": "polysaccharide(D)"
+  },
+  "rcsb_polymer_entity_container_identifiers": {
+    "entity_id": "5",
+    "entry_id": "1ABC",
+    "auth_asym_ids": ["D"],
+    "uniprot_ids": []
+  }
+}

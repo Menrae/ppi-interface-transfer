@@ -41,6 +41,20 @@ PLDDT_BANDS = (50, 70, 90)
 # for the pair to be considered part of the interface.
 INTERFACE_DISTANCE_CUTOFF_ANGSTROM = 5.0
 
+# Upper bound on distinct protein entities per PDB entry for candidate
+# selection (Phase 1). Excludes very large assemblies (e.g. viral capsids,
+# ribosomes) where "the interface" is no longer a single well-defined
+# pairwise surface. Candidates have between 2 and this many protein
+# entities, inclusive.
+MAX_PROTEIN_ENTITIES = 10
+
+# Minimum modeled residues (entity_poly.rcsb_sample_sequence_length) for a
+# chain to be considered a foldable domain rather than a peptide fragment.
+# Comparable in spirit to PeSTo's own training filter (min_num_res=48 in
+# their model/config.py); kept slightly more permissive here since this is
+# candidate *selection*, not PeSTo's own training set.
+MIN_CHAIN_LENGTH = 40
+
 # Maximum pairwise sequence identity allowed between train and test
 # entries to avoid redundancy/leakage.
 SEQUENCE_IDENTITY_CUTOFF = 0.30

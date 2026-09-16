@@ -1,0 +1,10 @@
+{
+  "query_id": "test-query-id",
+  "result_type": "entry",
+  "total_count": 3,
+  "result_set": [
+    {"identifier": "1ABC", "score": 1.0},
+    {"identifier": "2DEF", "score": 1.0},
+    {"identifier": "3GHI", "score": 1.0}
+  ]
+}

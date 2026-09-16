@@ -1,0 +1,13 @@
+{
+  "entity_poly": {
+    "rcsb_entity_polymer_type": "Protein",
+    "rcsb_sample_sequence_length": 180,
+    "type": "polypeptide(L)"
+  },
+  "rcsb_polymer_entity_container_identifiers": {
+    "entity_id": "4",
+    "entry_id": "3GHI",
+    "auth_asym_ids": ["A"],
+    "uniprot_ids": []
+  }
+}

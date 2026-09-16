@@ -10,14 +10,16 @@ Last updated: 2026-09-16.
 
 ## Where things stand
 
-**No analysis code has been written yet.** Everything so far is
-environment setup, planning, and one piece of investigation (PeSTo split
-resolution). Phase 1 of `PLAN.md` (candidate complex selection) has not
-been started.
+**Phase 1 (candidate complex selection) is done and has run successfully.**
+Phases 2-10 are not started. See "Completed phases" below for what Phase 1
+actually produced and what it means for Phase 2.
 
-**Nothing has been committed to git.** The user reviews and commits
-themselves — do not `git commit` or `git push` unless explicitly asked to
-in that session, even if a task appears complete.
+**Everything has been committed and pushed** to
+`https://github.com/Menrae/ppi-interface-transfer.git` (`main`), through
+the commit that set up scaffolding/environment/plan. Phase 1's code and
+outputs (this session's work) are **not yet committed** — confirm with the
+user before committing/pushing, per their standing preference to review
+first; don't assume a green light carries over between sessions.
 
 ## What exists on disk right now
 
@@ -29,11 +31,14 @@ in that session, even if a task appears complete.
   authoritative design doc; **implement in phase order**, Phase 1 first.
 - `src/config.py` — all paths and tunable thresholds as constants:
   `RESOLUTION_CUTOFF_ANGSTROM=2.5`, `PDB_RELEASE_DATE_CUTOFF="2018-04-30"`
-  (release date, not deposit date), `PLDDT_BANDS=(50,70,90)`,
+  (release date, not deposit date), `MAX_PROTEIN_ENTITIES=10`,
+  `MIN_CHAIN_LENGTH=40`, `PLDDT_BANDS=(50,70,90)`,
   `INTERFACE_DISTANCE_CUTOFF_ANGSTROM=5.0`, `SEQUENCE_IDENTITY_CUTOFF=0.30`,
-  `LEAKAGE_FILTER_MODES=("homolog","exact_train","none")`. Only
-  `src/__init__.py` and `config.py` exist under `src/` so far — no other
-  modules have been written.
+  `LEAKAGE_FILTER_MODES=("homolog","exact_train","none")`.
+- `src/data/select_complexes.py` — Phase 1 implementation (see "Completed
+  phases" below). `tests/test_select_complexes.py` (11 tests, passing) +
+  `tests/fixtures/` (small saved RCSB/SIFTS JSON/TSV fixtures, no network
+  needed to run the tests).
 - `docs/Project_Proposal.pdf` + `docs/proposal.txt` — the original proposal
   and its extracted text (via `pypdf`, now in `requirements.txt`).
 - `data/raw/pesto_splits/` — **already downloaded and cached**: PeSTo's
@@ -50,10 +55,18 @@ in that session, even if a task appears complete.
   (needed for Phase 2's homology search — no system package manager access
   in this container; plan is a static binary in `external/mmseqs/`, not
   yet fetched).
-- Empty scaffold directories: `data/{raw,interim,processed}` (beyond
-  `pesto_splits`), `results/`, `notebooks/`, `tests/` (just `__init__.py`),
-  `logs/`, `external/` (empty — PeSTo repo itself has not been checked out
-  here yet, only its split-list files were fetched for investigation).
+- `data/interim/candidates.csv` (1275 rows), `data/interim/phase1_attrition.csv`
+  — Phase 1 outputs, see "Completed phases" below.
+- `data/raw/rcsb/{search,entries,polymer_entities}/` — cached RCSB API
+  responses from the Phase 1 run (500-entry cap); reruns of
+  `select_complexes` against the same query/entries are fully offline.
+- `data/raw/sifts/pdb_chain_uniprot.tsv.gz` — cached bulk SIFTS file
+  (~986k chain mappings loaded from it).
+- `logs/select_complexes.log` — full DEBUG log of the Phase 1 run (every
+  dropped chain + every SIFTS disagreement, with reasons).
+- Empty scaffold directories: `data/processed`, `results/`, `notebooks/`,
+  `external/` (PeSTo repo itself has not been checked out here yet, only
+  its split-list files were fetched for investigation).
 
 ## Decisions already made (don't re-derive these — see `PLAN.md` for full reasoning)
 
@@ -96,21 +109,90 @@ in that session, even if a task appears complete.
   this container — fallbacks are `biotite.structure.annotate_sse` (DSSP),
   `biotite.structure.sasa` (freesasa), and a static MMseqs2 binary in
   `external/` (MMseqs2 fallback not yet fetched).
+- **`.gitignore` gotcha, fixed 2026-09-16:** the original patterns
+  (`data/`, `results/`, `logs/`, `external/`, no leading slash) matched
+  those directory names at *any* depth, not just repo root — so
+  `src/data/` was being silently git-ignored the moment it was created,
+  and `select_complexes.py` never even showed up in `git status`. Fixed by
+  anchoring to `/data/`, `/results/`, `/logs/`, `/external/`. If a new
+  top-level `src/<name>/` package ever collides with a root-level ignored
+  dir name again, check `git check-ignore -v <path>` before assuming
+  `git status` is complete — it can be silently empty.
+
+## Completed phases
+
+### Phase 1 — Candidate complex selection (2026-09-16)
+
+`src/data/select_complexes.py`, runnable as
+`.venv/bin/python -m src.data.select_complexes --max-entries N`. First live
+run used `--max-entries 500` (of 10,774 total hits for the full filter —
+the full run has not been done yet). See `PLAN.md` Phase 1 for the
+file-path/module reorganization vs. the original sketch.
+
+**Attrition (chain-level, from `data/interim/phase1_attrition.csv`):**
+
+| stage | n_before | n_dropped | n_remaining |
+| --- | --- | --- | --- |
+| initial_protein_chains | 1655 | 0 | 1655 |
+| non_protein_entity_type | 1655 | 0 | 1655 |
+| min_chain_length>=40 | 1655 | 245 | 1410 |
+| uniprot_mapping | 1410 | 132 | 1278 |
+| chimera | 1278 | 3 | 1275 |
+
+Entry-level: 500/500 entries fetched successfully (0 fetch errors, 0 local
+sanity-check failures — every fetched entry genuinely satisfied
+resolution/release-date cutoffs). Final: **1275 candidate chains across 473
+entries, 160 unique UniProt accessions**.
+
+**Distributions:** resolution mean 1.94 Å (range 1.00-2.50, as expected
+given the cutoff); release years 2018 (196), 2019 (23), 2020 (275), 2021
+(300), 2022 (144), 2026 (337) — lumpy because this 500-entry slice is the
+alphabetically-first `rcsb_id`-sorted subset of hits, not a random/temporal
+sample; a full run will smooth this out. `sifts_agrees` was True for
+1265/1275 chains (99.2%); **all 10 disagreements were SIFTS-bulk-file
+coverage gaps** (SIFTS had no mapping at all for that chain, not a
+conflicting accession) — mostly newer TrEMBL-style accessions
+(`A0A...`) not yet in the static bulk snapshot, plus one real antibody
+chain (P01854, IgE heavy constant region, PDB 30AF). This validates using
+RCSB's own `uniprot_ids` (SIFTS-derived, but live-computed) as the
+authoritative source, with the bulk file as a secondary check, as
+implemented.
+
+**Important finding for Phase 2:** UniProt diversity is much lower than
+entry count suggests (160 accessions / 473 entries) because this slice
+contains at least two large **crystallographic fragment-screening
+campaigns** deposited as many near-identical entries of the same complex:
+184 chains (92 entries) of yeast Prp8–Aar2 (PDB `5QY*`, UniProt
+P33334/P32357) and 102 chains (51 entries) of bovine tubulin α/β (PDB
+`5S4*`, UniProt P81947/Q6B856) — together ~30% of all entries in this
+slice. These will cluster hard in Phase 2's 30%-identity redundancy
+reduction (near-100% identity within each campaign), which is the correct
+behavior, but it means **raw entry/chain counts from Phase 1 substantially
+overstate biological diversity** — don't use them as a proxy for Phase 7's
+target sample size without going through Phase 2 first. No antibody-chain
+dominance was found in this slice (only the one incidental IgE hit above).
 
 ## Next step
 
-**Start implementing Phase 1** (`PLAN.md` "Phase 1 — Candidate complex
-selection"): build `src/data/rcsb_search.py`, `src/data/sifts.py`,
-`src/pipeline/select_candidates.py`, plus their tests, to query the RCSB
-Search API for X-ray structures meeting `RESOLUTION_CUTOFF_ANGSTROM` and
-`PDB_RELEASE_DATE_CUTOFF`, with ≥2 protein entities and no nucleic acids,
-joined against the bulk SIFTS `pdb_chain_uniprot.tsv.gz` for chain-level
-UniProt mapping. Follow `PLAN.md`'s exact inputs/outputs/file paths for
-that phase, and `CLAUDE.md`'s logging/testing conventions.
+**Implement Phase 2** (`PLAN.md` "Phase 2 — Redundancy reduction +
+PeSTo-overlap flagging"): build `src/data/sequences.py`,
+`src/pipeline/redundancy_reduction.py`, `src/data/pesto_overlap.py` plus
+tests. Needs: (1) sequences for the 1275 candidate chains (RCSB
+polymer-entity API, or reuse `entity_poly.pdbx_seq_one_letter_code_can`
+already present in the cached `data/raw/rcsb/polymer_entities/*.json` from
+Phase 1 — check there before re-fetching); (2) a static MMseqs2 binary
+fetched into `external/mmseqs/` (not yet done — no root/apt in this
+container, see `PLAN.md` §6 Risks); (3) sequences for PeSTo's
+train+test+validation chains (the split files are already cached at
+`data/raw/pesto_splits/`, but their sequences still need to be fetched).
 
-Before starting, it's worth resolving open question #3 from `PLAN.md` §5
-(the Phase 9 significance threshold) since it's cheap to decide now and
-avoids picking a threshold after seeing results later.
+Before running Phase 2 at scale, consider running Phase 1 without
+`--max-entries` (or with a larger cap) first — the 500-entry test run is
+a small, non-random slice (see fragment-screening finding above), so
+Phase 2's redundancy numbers on just this slice won't be representative.
+
+Open question #3 from `PLAN.md` §5 (the Phase 9 significance threshold)
+is still unresolved and still cheap to decide now.
 
 ## How to update this file
 
