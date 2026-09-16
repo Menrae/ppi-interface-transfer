@@ -254,55 +254,266 @@ are themselves `wc -l`-style counts.)*
   sample artifact rather than a structural problem. See PROGRESS.md for the
   full cluster count, leakage rates, threshold-sweep table, and the two
   additional breakdowns (train-only vs. train+test+validation union;
-  survivor rate by release year) produced to inform the (still undecided)
-  leakage-threshold choice — this plan does not pick a threshold.
+  survivor rate by release year) produced to inform the leakage-threshold
+  decision. **Decision recorded 2026-09-16** (see confound (e) and the new
+  confound (f) below): the primary test set is `identity < 0.30` against
+  PeSTo's train+test+validation union — i.e. `eligible_homolog` /
+  `pesto_homolog_overlap == False` in `candidates_dedup.csv` — n=696. The
+  sensitivity analyses (looser thresholds up to 0.95, exact-ID-only, no
+  filter) remain as recorded, all with strictly larger n. Every candidate
+  representative's `candidates_dedup.csv` row now carries one boolean
+  column per `LEAKAGE_FILTER_MODES` entry (`eligible_homolog`,
+  `eligible_exact_train`, `eligible_none`), computed from the same
+  in-memory leakage flags rather than recomputed from CSV strings, so later
+  phases can select any subset by column without rerunning the homology
+  search.
 
-### Phase 3 — Download PDB mmCIFs and AlphaFold DB models
-- **Inputs:** `data/processed/nonredundant_complexes.parquet`.
-- **Outputs:**
-  - `data/raw/pdb/{pdb_id}.cif.gz`
-  - `data/raw/alphafold/{uniprot_acc}.cif.gz` (AlphaFold DB v4)
-  - `data/interim/download_manifest.parquet` — `id`, `source`, `url`,
-    `local_path`, `status`, `reason`
-- **src modules:** `src/data/download_pdb.py`, `src/data/download_alphafold.py`,
-  `src/pipeline/download_structures.py`
-- **Tests:** `tests/test_download_pdb.py`, `tests/test_download_alphafold.py`
-  (mocked HTTP; cached files are not re-fetched), `tests/test_download_structures.py`
-  (manifest correctly tallies success/failure)
-- **Success criterion:** ≥95% of nonredundant entries have both files cached;
-  a rerun with files already present makes 0 HTTP calls (asserted via mock
-  call count); every failure logged with ID + HTTP status/reason.
+### Phase 3 — Download PDB mmCIFs and AlphaFold DB models — **DONE** (2026-09-16)
 
-### Phase 4 — Residue-numbering mapping (most correctness-critical)
-- **Inputs:** PDBe's "updated" mmCIF per entry — `https://www.ebi.ac.uk/pdbe/entry-files/download/{pdb_id_lower}_updated.cif`
-  — used **instead of** the plain RCSB mmCIF from Phase 3 for this step, since
-  it embeds per-residue SIFTS UniProt cross-references directly in extra
-  `_atom_site` fields (`pdbx_sifts_xref_db_name`, `pdbx_sifts_xref_db_acc`,
-  `pdbx_sifts_xref_db_num`, `pdbx_sifts_xref_db_res`) alongside
-  `_pdbx_poly_seq_scheme` — one download gets both structure and mapping, no
-  per-entry mappings-API call needed. The bulk `pdb_chain_uniprot.tsv.gz`
-  from Phase 1 still covers chain-level lookups; this phase is what resolves
-  residue-level numbering.
+Implemented as a single module, `src/data/fetch_structures.py`, following
+the same one-module-per-phase precedent as Phases 1/2. Two corrections to
+the original sketch below, made deliberately at implementation time (this
+session, after the leakage-threshold decision was recorded — see
+PROGRESS.md):
+
+1. **Scope is all 3,009 Phase 2 representatives, not a
+   `nonredundant_complexes.parquet` that doesn't exist** (superseded by
+   `candidates_dedup.csv`, see Phase 2). Every representative is
+   downloaded — including the sensitivity-mode-only ones — so the
+   sensitivity analyses (Phase 7) have inputs too, not just the primary
+   696. Representatives are processed in priority order (primary
+   `eligible_homolog` set first, then `eligible_exact_train`, then the
+   rest) so the primary set is fully usable even if the run is
+   interrupted partway through.
+2. **The experimental structure downloaded here is PDBe's "updated" mmCIF**
+   (`https://www.ebi.ac.uk/pdbe/entry-files/download/{pdb_id_lower}_updated.cif`),
+   not a plain RCSB mmCIF — i.e. this phase fetches directly what Phase 4
+   was originally going to fetch separately into its own
+   `data/raw/pdb_updated/` directory (see the corrected Phase 4 below).
+   One download now serves both this phase's raw-structure need and Phase
+   4's residue-mapping need (the file embeds SIFTS UniProt cross-references
+   per residue), instead of two separate downloads of overlapping content.
+- **Inputs:** `data/interim/candidates_dedup.csv` (Phase 2 output, 3,009
+  representative rows, including the `eligible_homolog` /
+  `eligible_exact_train` / `eligible_none` columns used for both download
+  priority and the attrition breakdown below).
+- **AlphaFold model resolution (no hardcoded version/URL pattern):** the
+  AlphaFold DB prediction API (`https://alphafold.ebi.ac.uk/api/prediction/{accession}`)
+  is queried per UniProt accession; the response can include *isoform*
+  entries (e.g. querying `Q9UPN9` can also return `Q9UPN9-2`), so only the
+  entry whose own `uniprotAccession` exactly matches the queried accession
+  counts as a hit. Model version (`latestVersion`), the model's own UniProt
+  sequence (`uniprotSequence`), and its residue range (`uniprotStart`/
+  `uniprotEnd`) are all read from this response, never assumed. The mmCIF
+  itself is downloaded from the response's own `cifUrl` — never a
+  constructed/guessed URL. No PAE file is downloaded (not called for
+  anywhere in this plan).
 - **Outputs:**
-  - `data/raw/pdb_updated/{pdb_id}_updated.cif.gz` (cached)
-  - `data/interim/residue_mappings/{pdb_id}_{chain}.parquet` —
-    `auth_seq_id`, `auth_ins_code`, `label_seq_id`, `uniprot_acc`,
-    `uniprot_resnum`, `alphafold_resnum` (= `uniprot_resnum`, AF model numbering
-    is UniProt-native), `residue_name`, `is_observed`, `unmapped_reason`
-- **src modules:** `src/data/download_pdb_updated.py`, `src/mapping/pdb_numbering.py`,
-  `src/mapping/sifts_residue_map.py` (parses the embedded `_atom_site`
-  `pdbx_sifts_xref_db_*` fields, not a separate API response),
-  `src/pipeline/build_residue_mappings.py`
-- **Tests:** `tests/test_pdb_numbering.py` (fixture mmCIF with an insertion
-  code and a gap, parsed exactly), `tests/test_sifts_residue_map.py` (parses
-  the embedded `pdbx_sifts_xref_db_*` columns from a fixture updated-mmCIF),
-  `tests/test_build_residue_mappings.py` (round-trip against a hand-verified
-  table for ≥5 real entries chosen to include insertion codes, engineered
-  tags, and chain breaks; every unmapped residue carries a reason string,
-  never a silent drop)
-- **Success criterion:** 100% match against the hand-verified fixture table;
-  every observed `auth_seq_id` in every mapped chain has either a UniProt
-  residue number or an explicit `unmapped_reason`.
+  - `data/raw/pdb/{PDB_ID}_updated.cif.gz` (gzip-compressed; ~4x smaller
+    than the plain-text download)
+  - `data/raw/alphafold/{uniprot_acc}.cif.gz` (gzip-compressed)
+  - `data/raw/alphafold/api/{uniprot_acc}.json` (cached raw prediction-API
+    response — both successful and permanently-failed (e.g.
+    accession-absent) outcomes are cached, since "absent from AlphaFold
+    DB" is a common, stable outcome here worth memoizing, not a transient
+    error to keep retrying)
+  - `data/raw/uniprot/{uniprot_acc}.fasta` (cached current UniProt sequence,
+    fetched to detect `sequence_mismatch` against the AlphaFold model's own
+    sequence)
+  - `data/interim/fetch_report.csv` — one row per representative:
+    `cluster_id`, `pdb_id`, `chain_id`, `uniprot_acc`, `release_date`, the
+    three `eligible_*` leakage-mode columns (carried through from Phase 2
+    so downstream phases can filter without rejoining), both sources' local
+    paths/status/failure-reason, and `overall_status`
+    (`complete`/`partial`/`failed`)
+  - `data/interim/phase3_attrition.csv` — one row per `LEAKAGE_FILTER_MODES`
+    entry: eligible-representative count, PDB/AlphaFold/both-success counts
+    for that mode's subset, and whether `n_both_success` clears
+    `MIN_TEST_CHAINS_TARGET`
+- **Pre-flight estimate (this session's addition, not in the original
+  sketch):** before the bulk download, a small *real* (not synthetic)
+  calibration sample of not-yet-cached ids is fetched to empirically
+  project total wall-clock time and disk usage (`calibrate_and_estimate`
+  in `src/data/fetch_structures.py`); if the projection exceeds
+  `config.PHASE3_TIME_BUDGET_SECONDS` (2h) or `config.PHASE3_DISK_BUDGET_BYTES`
+  (20GB), the run stops before downloading the rest. See PROGRESS.md for
+  this run's actual calibrated projection and outcome.
+- **Failure reasons, logged distinctly (never a silent drop):**
+  `accession_absent_from_alphafold_db`, `fragmented_in_alphafold_db` (AFDB
+  has split the *queried* accession's own sequence into >1 fragment model
+  — fragments are not stitched here), `sequence_mismatch` (the AlphaFold
+  model's own UniProt sequence disagrees with the accession's *current*
+  UniProt sequence — numbering from this model would be unsafe for Phase
+  4, so its mmCIF is not downloaded), `network_error` (transient —
+  uncached, retried on the next run), `pdb_download_error:<HTTP status>`
+  (PDBe returned a non-200 status for the updated mmCIF).
+- **src modules:** `src/data/fetch_structures.py` — pure URL-builder/
+  response-classifier functions (unit-tested directly on fixtures, no
+  network) plus the cached fetch/download functions and orchestration.
+- **Tests:** `tests/test_fetch_structures.py` (30 tests, no network) — URL
+  construction; AFDB response classification on saved fixtures (success,
+  isoform-only, fragmented, absent, empty body); FASTA parsing and
+  sequence-match comparison; priority ordering; `candidates_dedup.csv`
+  loading/boolean-parsing; fetch-report-row schema and
+  `overall_status` derivation; per-leakage-mode attrition counting; and,
+  via a fake `requests.Session` that raises on any unwired URL, both "cache
+  hit makes zero network calls" and every failure-classification path
+  (network error, HTTP error, accession absent, fragmented, sequence
+  mismatch) end-to-end through `fetch_pdb_structure`/`fetch_alphafold_model`.
+- **Success criterion:** every representative gets a `fetch_report.csv` row
+  with a definite status and, on failure, a specific reason (never blank);
+  a rerun with every file already cached makes zero HTTP calls; the
+  per-leakage-mode attrition table reports whether the primary mode's
+  `n_both_success` clears `MIN_TEST_CHAINS_TARGET`. See PROGRESS.md for this
+  run's actual counts, disk usage, and failure-reason breakdown.
+
+### Phase 4 — Residue-numbering mapping (most correctness-critical) — **DONE** (2026-09-16)
+
+Implemented as a single module, `src/data/align_residues.py`, per this
+session's explicit instruction (superseding the three-module sketch
+below, following the same one-module-per-phase precedent as Phases 1-3).
+**Deviation from the recorded output path, flagged and resolved in favor
+of the recorded version per standing instruction:** this session's brief
+asked for `data/processed/residue_maps/{pdb_id}_{chain}.parquet`; the
+recorded plan (immediately above, prior revision) says
+`data/interim/residue_mappings/{pdb_id}_{chain}.parquet`. Proceeded with
+the **recorded** `data/interim/residue_mappings/` path — the actual
+directory and columns produced are documented below.
+
+- **Inputs:** `data/interim/fetch_report.csv` rows with
+  `overall_status == "complete"` (2,704 representatives with both
+  structures downloaded, Phase 3) — sufficient on its own (already carries
+  `pdb_cif_path`, `alphafold_cif_path`, `alphafold_uniprot_start/end`,
+  `uniprot_acc`, and the `eligible_*` leakage columns), no rejoin against
+  `candidates_dedup.csv` needed. PDBe's "updated" mmCIF is read directly
+  from Phase 3's cache at `data/raw/pdb/{PDB_ID}_updated.cif.gz` — no
+  separate download.
+- **Primary mapping source:** the same embedded `_atom_site` SIFTS
+  cross-reference columns recorded in the prior revision of this section
+  (`pdbx_sifts_xref_db_name/_acc/_num`) — **discovery this session: the
+  AlphaFold mmCIF (fetched from AlphaFold DB via the EBI/PDBe mirror) embeds
+  the identical columns**, self-declaring its own UniProt-native numbering
+  per residue. One parser (`load_raw_atom_site_rows`/`reduce_to_residues`)
+  handles both files. Modified residues (e.g. MSE) are resolved to their
+  parent amino acid via `gemmi.find_tabulated_residue(...).one_letter_code`
+  (covers the full CCD, not a hand-rolled table) — this is how they're
+  "treated through their parent residue."
+- **AlphaFold numbering is verified per chain, not assumed:**
+  `validate_alphafold_numbering` checks that the AlphaFold model's own
+  `auth_seq_id` range exactly equals its recorded
+  `[alphafold_uniprot_start, alphafold_uniprot_end]` *and* that every
+  residue's own embedded SIFTS annotation agrees (`db_name == "UNP"`,
+  `db_acc == uniprot_acc`, `db_num == auth_seq_id`). Any disagreement (or
+  the columns being entirely absent from that particular file) excludes
+  the chain (`alphafold_numbering_not_uniprot_native`/
+  `alphafold_range_mismatch`) rather than trusting the Phase 3 API
+  metadata blindly.
+- **Surprising finding this session, now an explicit gate:** ~9% of the
+  UniProt accessions Phase 3 resolved to an "AlphaFold DB" hit are actually
+  third-party **Community submissions** (mostly `ColabFold v1.5.2`/`v1.0-alpha`,
+  provider ids `VR3D`/`ATBC`/`NTDX`/`BFVD`), not genuine Google DeepMind
+  AlphaFold2 predictions (provider id `GDM`) — AlphaFold DB's own prediction
+  API (queried by Phase 3) returns these under the *same* accession lookup,
+  and Phase 3's spec never checked provider identity. These do not carry
+  the training-cutoff/pipeline guarantee this project's whole AF2
+  comparison rests on (confound (a)), so `verify_official_alphafold_provider`
+  now checks Phase 3's own cached API response's `providerId` and excludes
+  (`alphafold_model_not_official_afdb`) anything that isn't `"GDM"`, checked
+  first, before any mmCIF parsing. This is a real correctness gap in the
+  *data*, not in Phase 3's code as originally specified — recorded here
+  rather than reopening Phase 3, since Phase 4's gate fully prevents
+  contamination of the mapped/benchmarked set either way. See PROGRESS.md
+  for the exact count (43/2,704, ~1.6% of this phase's scope — smaller than
+  9% of all accessions since most Community-model accessions had already
+  been filtered out for other reasons upstream or don't recur across
+  multiple representatives).
+- **Fallback (PLAN.md item 4):** when SIFTS mapping is absent for a chain
+  or fails validation (see below), a global alignment (Biopython
+  `PairwiseAligner`, BLOSUM62, free end-gaps via `end_insertion_score`/
+  `end_deletion_score = 0` so expression tags/linkers at either terminus
+  align to nothing instead of forcing a bad internal alignment) of the
+  observed experimental sequence against the AlphaFold model's own
+  sequence is tried instead. If the fallback also fails validation, the
+  chain is excluded (`fallback_failed_validation`, with both methods'
+  compared-count/identity embedded in the reason string).
+- **Validation gate (new config constant, justified below):**
+  `RESIDUE_MAPPING_VALIDATION_IDENTITY = 0.90` — a mapping method (SIFTS or
+  fallback) is trusted for a chain only if ≥90% of its UniProt-mapped,
+  AlphaFold-range residues match AlphaFold's residue identity there.
+  Deliberately generous to real engineered point mutations (which must
+  *not* fail the chain, per this session's instruction — a single mismatch
+  in an otherwise-clean chain is recorded as a mutation, not an exclusion)
+  while still catching frame-shift/misalignment-scale errors, which in
+  practice produce near-zero identity, not a borderline value — confirmed
+  empirically on the full run (see PROGRESS.md: real `fallback_failed_validation`
+  cases clustered at 55-90% identity, well below both real point-mutation
+  rates and the threshold, while every successfully mapped chain landed at
+  ≥90%, most at 100%).
+- **`MIN_MAPPED_COVERAGE = 0.80`** (new config constant): a chain is
+  excluded (`coverage_below_threshold`) if fewer than 80% of its *observed*
+  residues end up kept (mapped to UniProt *and* within the AlphaFold
+  model's range). Justified by consistency with `CLUSTER_MIN_COVERAGE`
+  (also 0.80, Phase 2) — "a meaningful majority of the chain" — while still
+  tolerating some loss to expression tags/linkers and residues outside the
+  AlphaFold range. The coverage-threshold sweep this session ran
+  (`data/interim/phase4_coverage_sweep.csv`) shows this threshold is barely
+  binding in practice: the minimum coverage among all 2,604 successfully
+  mapped chains was 0.81, and tightening to 0.90 or 0.95 would only drop
+  13 or 57 chains respectively (of 2,604) — most chains that map at all
+  map almost completely.
+- **Outputs:**
+  - `data/interim/residue_mappings/{pdb_id}_{chain}.parquet` — one row per
+    experimental residue *observed* in the crystal structure (not one row
+    per UniProt position; see below): `auth_seq_id`, `auth_ins_code`,
+    `label_seq_id`, `residue_name` (observed 3-letter, e.g. `"MSE"`),
+    `is_observed` (always `True` in this table — kept for schema
+    compatibility with the column recorded above, not used to represent
+    unobserved gaps, which are simply absent rows), `uniprot_acc`,
+    `uniprot_resnum`, `alphafold_resnum` (`= uniprot_resnum` once
+    verified — both kept for schema fidelity with the recorded columns),
+    `alphafold_residue_name`, `match_flag` (`None` if not compared),
+    `method` (`"sifts"`/`"fallback"`, chain-level, repeated per row),
+    `unmapped_reason` (`""` iff kept, including kept-but-mismatched
+    engineered mutations — never blank without an explicit reason
+    otherwise).
+  - `data/interim/mapping_report.csv` — one row per representative in
+    scope: `cluster_id`, `pdb_id`, `chain_id`, `uniprot_acc`, the three
+    `eligible_*` leakage columns (carried through, no rejoin needed),
+    `method`, `n_observed`, `n_kept`, `coverage`, `n_compared`,
+    `n_mutations`, `identity`, `status` (`"mapped"`/`"excluded"`),
+    `exclusion_reason`.
+  - `data/interim/phase4_attrition.csv` — per `LEAKAGE_FILTER_MODES` entry:
+    eligible-representative count, mapped/excluded counts, whether
+    `n_mapped` clears `MIN_TEST_CHAINS_TARGET`.
+  - `data/interim/phase4_coverage_sweep.csv` — reporting only (PLAN.md item
+    6): how many already-mapped chains would additionally survive at each
+    of `(0.50, 0.60, 0.70, 0.80, 0.90, 0.95)` coverage, without changing
+    `MIN_MAPPED_COVERAGE` or which chains Phase 4 actually excluded.
+- **src modules:** `src/data/align_residues.py`.
+- **Tests:** `tests/test_align_residues.py` (43 tests, no network) — hand-built
+  mmCIF fixtures covering insertion codes, alternate locations (occupancy-
+  and alt-id-tiebreak), non-sequential/negative author numbering
+  (including one fixture asserting a naive constant-offset mapping would
+  be wrong where ours isn't), internal gaps, expression tags with no SIFTS
+  mapping, residues outside the AlphaFold range, a modified residue (MSE),
+  an engineered point mutation (kept, not excluded), a chain requiring the
+  fallback alignment, AlphaFold-numbering self-validation
+  (success/range-mismatch/wrong-accession/missing-columns), the
+  official-vs-Community-provider gate, coverage/attrition/sweep
+  arithmetic, and end-to-end `process_representative` on fixture files for
+  each terminal outcome (sifts success, fallback success, AF-numbering
+  exclusion, coverage exclusion, mutation-chain success).
+- **Hand-verification:** `scripts/spot_check_mapping.py` -- seeded random
+  sample of N primary-set mapped chains x 3 kept residues each, printed as
+  a table plus a ChimeraX command block (opens both structures, selects
+  the corresponding residues in each) for visual confirmation. Not part of
+  the pipeline itself; reads Phase 4's already-written outputs.
+- **Success criterion:** every representative in scope gets a
+  `mapping_report.csv` row with a definite status and, on exclusion, a
+  specific reason; every parquet row is either kept (`unmapped_reason ==
+  ""`) or carries an explicit reason, never a silent drop. Met on the full
+  run — see PROGRESS.md for the actual counts, method split, and
+  coverage/identity distributions.
 
 ### Phase 5 — Ground-truth interface labels
 - **Inputs:** `data/raw/pdb/{pdb_id}.cif.gz` (full assembly), residue mappings
@@ -536,7 +747,34 @@ result stratified by `pesto_homolog_overlap` status side by side, and (2)
 reports the two sensitivity modes (`"exact_train"`, `"none"`), which have
 strictly larger n, so the reader can see whether the finding survives a
 looser filter rather than losing the comparison entirely to a sample-size
-floor.
+floor. **Resolved 2026-09-16 (decision, not just mitigation design):** at
+full scale this floor/target concern turned out to be moot — the primary
+mode alone clears both `MIN_TEST_CHAINS_TARGET` (100) and
+`MIN_TEST_CHAINS_FLOOR` (50) by a wide margin (n=696), so the leakage
+threshold was kept at `SEQUENCE_IDENTITY_CUTOFF` (0.30) against the full
+train+test+validation union rather than loosened for sample size. See
+confound (f) for the tradeoff this choice does *not* resolve (temporal
+coverage).
+
+**(f) Primary test set is skewed toward 2021+ releases (limitation, not
+mitigated).** Stratifying the primary (`"homolog"`-mode, 0.30 identity)
+leakage flag by candidate release year (`data/interim/leakage_by_release_year.csv`,
+Phase 2 full-scale run) shows chains released 2018-2020 are almost all
+(99-100%) flagged as PeSTo-overlapping — essentially none of them survive
+the primary filter — while the flag rate drops to and plateaus around
+59-63% from 2021 onward. Practically, almost all of the primary set's 696
+survivors are drawn from 2021+ releases; there is essentially no primary-set
+coverage of the 2018-2020 window immediately after the AF2 training cutoff
+(`PDB_RELEASE_DATE_CUTOFF`, confound (a)). This pattern suggests PeSTo's own
+training-data snapshot extends to roughly 2020-2021 (PeSTo was published in
+2023, so this is plausible), well past AF2's 2018-04-30 cutoff — i.e. the
+two models' effective "knowledge cutoffs" are not aligned, and the primary
+test set's chains are systematically farther in time from AF2's cutoff than
+from PeSTo's. This is inherent to the recorded leakage definition and is
+**not** resolved by the identity-threshold sweep (0.30-0.95 all show the
+same year pattern, `data/interim/leakage_threshold_sweep_by_source.csv`) —
+report it as a limitation in Phase 10, not something later phases should
+try to fix by loosening the filter.
 
 ## 4. Deviations from the proposal
 

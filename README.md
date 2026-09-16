@@ -151,11 +151,46 @@ detailed, actively-maintained log this section is drawn from.*
   down to 3,009 non-redundant representatives. Checking those
   representatives against PeSTo's own published training data found that
   roughly three-quarters are sequence-similar enough to count as
-  "overlapping" under the project's leakage definition — but enough
-  non-overlapping representatives remain (in the hundreds) to support the
-  benchmark. Exactly how strict to make that leakage cutoff is still an
-  open decision, informed by this run's results but not yet made.
-- ⬜ Phases 3–10 — not yet started.
+  "overlapping" under the project's leakage definition. **Leakage threshold
+  decided (2026-09-16):** the primary benchmark test set is the 696
+  representatives with <30% sequence identity to PeSTo's combined
+  train+test+validation data; sensitivity analyses at looser thresholds
+  remain available. One caveat worth flagging: under this definition,
+  almost none of the primary set's chains were released in 2018-2020 (right
+  after AlphaFold2's own training cutoff) — they're nearly all flagged as
+  overlapping PeSTo's data — so the primary set skews toward 2021-and-later
+  releases, which are farther in time from AlphaFold2's cutoff than the
+  minimum required by this project's filter.
+- ✅ **Phase 3 — Download structures**: done, full scale, all 3,009
+  representatives. Every one of the 2,294 unique PDB entries downloaded
+  successfully. AlphaFold models were obtained for 2,704/3,009
+  representatives (90%) — the rest failed for one of three distinct,
+  logged reasons: the UniProt accession isn't in AlphaFold DB (222), the
+  accession's sequence was split across multiple AlphaFold fragment models
+  rather than one (61), or the AlphaFold model's own sequence no longer
+  matches the accession's current UniProt sequence, so it was skipped
+  rather than risk mismatched residue numbering later (22). For the
+  primary (non-overlapping) benchmark set specifically, 609 of 696
+  representatives now have both structures ready to go — comfortably above
+  the ≥100 target. Total download: ~900 MB, ~71 minutes.
+- ✅ **Phase 4 — Residue-numbering mapping**: done, full scale, all 2,704
+  representatives with both structures downloaded. This is the step that
+  turns "we have two structure files" into "we know, residue by residue,
+  which atom in the experimental structure corresponds to which position
+  in the AlphaFold model" — done via each PDB entry's own embedded
+  UniProt cross-references (not any assumed numbering offset, which real
+  entries in this dataset would get wrong: one representative's mapping
+  shifts author residue 1335 to UniProt position 1137). 2,604/2,704
+  chains (96%) mapped successfully; 100 were excluded, each for one of
+  three specific, logged reasons — most notably, this step caught that
+  ~9% of the "AlphaFold" models Phase 3 downloaded were actually
+  third-party community submissions built with a different tool
+  (ColabFold), not genuine AlphaFold2, and excluded those rather than
+  silently treating them as equivalent. For the primary benchmark set,
+  579 of 609 representatives (95%) now have a validated mapping —
+  579/696 (83%) of the original leakage-filtered primary set has survived
+  every phase run so far, still comfortably above the ≥100 target.
+- ⬜ Phases 5–10 — not yet started.
 
 ## 6. Repository layout
 
@@ -196,10 +231,25 @@ sequence-identity cutoffs, etc.) are centralized in `src/config.py` — see
 # Phase 2: redundancy reduction + PeSTo leakage flagging
 # (writes data/interim/candidates_dedup.csv, clusters.tsv, leakage_threshold_sweep.csv)
 .venv/bin/python -m src.data.cluster_and_split
+
+# Phase 3: download PDB (updated mmCIF) + AlphaFold DB structures
+# (writes data/interim/fetch_report.csv, phase3_attrition.csv)
+.venv/bin/python -m src.data.fetch_structures
+# add --estimate-only to see the pre-flight time/disk projection without downloading
+
+# Phase 4: residue-numbering mapping (experimental <-> AlphaFold)
+# (writes data/interim/mapping_report.csv, residue_mappings/*.parquet)
+.venv/bin/python -m src.data.align_residues
+
+# Hand-verification: prints a table + ChimeraX commands for N random
+# mapped primary-set chains (seeded, so re-running with the same --seed
+# picks the same chains)
+.venv/bin/python scripts/spot_check_mapping.py --n 3 --seed 0
 ```
 
-Both commands cache every downloaded file under `data/raw/`, so rerunning
-them doesn't re-fetch anything that's already on disk.
+All download-based commands (Phases 1-3) cache every downloaded file
+under `data/raw/`, so rerunning them doesn't re-fetch anything that's
+already on disk. Phase 4 is a purely local computation (no network).
 
 ## 7. Deviations from the original proposal
 

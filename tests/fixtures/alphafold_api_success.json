@@ -1,0 +1,12 @@
+[
+  {
+    "entryId": "AF-Q9H1A3-F1",
+    "uniprotAccession": "Q9H1A3",
+    "uniprotId": "METL9_HUMAN",
+    "uniprotSequence": "MRLLAGWLCLSLASVWLARRMWTLRSPLTRSLYVN",
+    "uniprotStart": 1,
+    "uniprotEnd": 318,
+    "latestVersion": 6,
+    "cifUrl": "https://alphafold.ebi.ac.uk/files/AF-Q9H1A3-F1-model_v6.cif"
+  }
+]

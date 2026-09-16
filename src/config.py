@@ -86,3 +86,47 @@ MIN_TEST_CHAINS_FLOOR = 50
 # identity cutoff without pre-committing to a looser cutoff than
 # SEQUENCE_IDENTITY_CUTOFF (0.30, the lowest value swept).
 LEAKAGE_SWEEP_IDENTITY_THRESHOLDS = (0.30, 0.50, 0.70, 0.95)
+
+# --- Phase 3: structure download -----------------------------------------
+
+# Pre-flight estimate guardrails for src.data.fetch_structures: the module
+# empirically calibrates a wall-clock/disk projection for the full download
+# (see PLAN.md Phase 3) before committing to it. If the projection exceeds
+# either budget, the run stops before the bulk download and asks for
+# confirmation rather than proceeding unattended.
+PHASE3_TIME_BUDGET_SECONDS = 2 * 60 * 60
+PHASE3_DISK_BUDGET_BYTES = 20 * 1024**3
+
+# Number of not-yet-cached unique PDB entries / UniProt accessions (each, in
+# download-priority order) actually fetched to calibrate the pre-flight
+# time/disk estimate before committing to the full run. These calibration
+# fetches are real, cached downloads (not thrown away).
+PHASE3_ESTIMATE_SAMPLE_SIZE = 15
+
+# Polite fixed delay (seconds) between successive HTTP requests to PDBe,
+# AlphaFold DB, and UniProt in src.data.fetch_structures.
+PHASE3_REQUEST_DELAY_SECONDS = 0.1
+
+# --- Phase 4: residue-numbering mapping ----------------------------------
+
+# Minimum fraction of a chain's *observed* experimental residues that must
+# end up "kept" (mapped to a UniProt position that is also within the
+# AlphaFold model's range) for the chain to be retained. See PLAN.md Phase
+# 4 for the justification and the coverage-threshold sweep this was chosen
+# against -- 0.80 matches CLUSTER_MIN_COVERAGE's precedent elsewhere in
+# this project for "a meaningful majority of the chain," while still
+# tolerating some loss to expression tags/linkers and residues that fall
+# outside the AlphaFold model's modeled range.
+MIN_MAPPED_COVERAGE = 0.80
+
+# Minimum fraction of a chain's UniProt-mapped-and-in-AlphaFold-range
+# residues that must match the AlphaFold model's residue identity for a
+# mapping *method* (SIFTS or the fallback alignment) to be trusted for
+# that chain. Below this, isolated engineered point mutations (which are
+# expected and should NOT fail the chain, see PLAN.md Phase 4) no longer
+# explain the mismatch rate -- it's evidence of a numbering/frame error in
+# that method, not biology, so the other method (or exclusion) is tried
+# instead. 0.90 is deliberately generous to real single/few-residue
+# mutations while still catching frame-shift-scale misalignment, which
+# typically produces near-zero identity, not a borderline value.
+RESIDUE_MAPPING_VALIDATION_IDENTITY = 0.90

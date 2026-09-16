@@ -114,6 +114,38 @@ def test_compute_leakage_flags_exact_train_overlap_is_literal_id_membership():
     assert flags["1ABC_A"]["pesto_homolog_overlap"] is False  # no search hits at all
 
 
+def test_leakage_mode_eligible_homolog_excludes_overlap():
+    overlap_row = {"pesto_homolog_overlap": True, "pesto_exact_train_overlap": False}
+    clean_row = {"pesto_homolog_overlap": False, "pesto_exact_train_overlap": False}
+    assert cas.leakage_mode_eligible("homolog", overlap_row) is False
+    assert cas.leakage_mode_eligible("homolog", clean_row) is True
+
+
+def test_leakage_mode_eligible_exact_train_only_looks_at_exact_flag():
+    row = {"pesto_homolog_overlap": True, "pesto_exact_train_overlap": False}
+    # Homolog-overlapping but not an exact training-set match -> still eligible
+    # under the narrower exact_train mode.
+    assert cas.leakage_mode_eligible("exact_train", row) is True
+    row["pesto_exact_train_overlap"] = True
+    assert cas.leakage_mode_eligible("exact_train", row) is False
+
+
+def test_leakage_mode_eligible_none_is_always_true():
+    row = {"pesto_homolog_overlap": True, "pesto_exact_train_overlap": True}
+    assert cas.leakage_mode_eligible("none", row) is True
+
+
+def test_leakage_mode_eligible_rejects_unknown_mode():
+    with pytest.raises(ValueError):
+        cas.leakage_mode_eligible("bogus", {"pesto_homolog_overlap": False, "pesto_exact_train_overlap": False})
+
+
+def test_leakage_eligibility_fields_match_configured_modes():
+    assert cas.LEAKAGE_ELIGIBILITY_FIELDS == [f"eligible_{m}" for m in config.LEAKAGE_FILTER_MODES]
+    for field in cas.LEAKAGE_ELIGIBILITY_FIELDS:
+        assert field in cas.DEDUP_FIELDS
+
+
 # --- threshold sweep -------------------------------------------------------
 
 

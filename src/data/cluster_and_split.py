@@ -73,6 +73,8 @@ CANDIDATE_FIELDS = [
     "sifts_agrees",
 ]
 
+LEAKAGE_ELIGIBILITY_FIELDS = [f"eligible_{mode}" for mode in config.LEAKAGE_FILTER_MODES]
+
 DEDUP_FIELDS = CANDIDATE_FIELDS + [
     "cluster_id",
     "cluster_size",
@@ -85,7 +87,7 @@ DEDUP_FIELDS = CANDIDATE_FIELDS + [
     "max_identity_any",
     "pesto_homolog_overlap",
     "pesto_exact_train_overlap",
-]
+] + LEAKAGE_ELIGIBILITY_FIELDS
 
 CLUSTERS_FIELDS = ["cluster_id", "pdb_id", "chain_id", "is_representative"]
 ATTRITION_FIELDS = ["stage", "n_before", "n_dropped", "n_remaining", "note"]
@@ -380,6 +382,31 @@ def compute_leakage_flags(
     return flags
 
 
+def leakage_mode_eligible(mode: str, flags_row: dict) -> bool:
+    """Whether a representative is eligible for the test set under one of
+    config.LEAKAGE_FILTER_MODES.
+
+    "homolog" (primary): excludes anything with pesto_homolog_overlap
+    (>=SEQUENCE_IDENTITY_CUTOFF identity to PeSTo's train+test+validation
+    union) -- this is the recorded primary leakage definition (PLAN.md
+    Phase 2/7), n=696 at SEQUENCE_IDENTITY_CUTOFF=0.30.
+    "exact_train" (sensitivity A): excludes only exact PDBID_CHAINID
+    matches to PeSTo's published training file.
+    "none" (sensitivity B): no leakage filter at all -- always eligible.
+
+    Recorded as boolean columns on candidates_dedup.csv (one per mode) so
+    later phases can select any subset by column, without recomputing the
+    homology search.
+    """
+    if mode == "homolog":
+        return not flags_row["pesto_homolog_overlap"]
+    if mode == "exact_train":
+        return not flags_row["pesto_exact_train_overlap"]
+    if mode == "none":
+        return True
+    raise ValueError(f"unknown leakage filter mode: {mode!r}")
+
+
 def sweep_thresholds(flags: dict[str, dict]) -> list[dict]:
     """Report survivor counts at each swept identity threshold + exact-ID-only.
 
@@ -589,8 +616,15 @@ def run() -> None:
         row["cluster_id"] = rep_id
         row["cluster_size"] = cluster_size[rep_id]
         row.update(flags[rep_id])
+        for mode in config.LEAKAGE_FILTER_MODES:
+            row[f"eligible_{mode}"] = leakage_mode_eligible(mode, flags[rep_id])
         dedup_rows.append(row)
     write_csv(dedup_rows, DEDUP_FIELDS, CANDIDATES_DEDUP_PATH)
+    for mode in config.LEAKAGE_FILTER_MODES:
+        n_eligible = sum(1 for row in dedup_rows if row[f"eligible_{mode}"])
+        logger.info(
+            "eligible_%s=True for %d/%d representatives", mode, n_eligible, len(dedup_rows)
+        )
     logger.info("Wrote %d deduplicated+flagged representative chains to %s", len(dedup_rows), CANDIDATES_DEDUP_PATH)
 
     # --- Threshold sweep ---

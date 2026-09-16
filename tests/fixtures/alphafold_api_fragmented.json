@@ -1,0 +1,16 @@
+[
+  {
+    "entryId": "AF-Q9Y4C0-F1",
+    "uniprotAccession": "Q9Y4C0",
+    "uniprotStart": 1,
+    "uniprotEnd": 1400,
+    "latestVersion": 6
+  },
+  {
+    "entryId": "AF-Q9Y4C0-F2",
+    "uniprotAccession": "Q9Y4C0",
+    "uniprotStart": 1401,
+    "uniprotEnd": 2946,
+    "latestVersion": 6
+  }
+]
