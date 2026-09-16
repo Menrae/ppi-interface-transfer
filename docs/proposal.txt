@@ -1,0 +1,209 @@
+Armeen Shasti-Nazem 
+Predicting Protein-Protein Interaction (PPI) Interfaces from AlphaFold-Predicted Structures 
+Using Graph Neural Networks (GNN) 
+Summary 
+This project investigates whether GNN models trained to predict PPI interfaces from 
+experimental crystal structures maintain their accuracy when applied to AlphaFold-
+predicted structures. I propose a systematic benchmarking of the PeSTo geometric 
+transformer on matched experimental and AlphaFold structures, followed by an error 
+analysis correlating prediction failures with AlphaFold’s per-residue confidence scores 
+(pLDDT). The goal is to quantify the performance gap and identify the structural features 
+responsible, laying the groundwork for confidence-aware interface predictors suitable for 
+proteome-scale analysis. 
+Motivation and Background 
+Protein-protein interactions are central to virtually all cellular functions. From signal 
+transduction cascades to immune recognition, the specificity of biological processes 
+depends on which protein surfaces come into contact and how tightly they bind. 
+Disruptions to these interactions, whether through mutations at interface residues, 
+conformational changes, or the loss of binding partners, can derail cellular pathways and 
+contribute to diseases including cancer and neurodegeneration [1]. Understanding which 
+residues participate in binding interfaces is therefore fundamental to both basic biology 
+and drug design. 
+Experimental approaches for characterizing PPI interfaces, including X-ray co-
+crystallography, cryo-electron microscopy of complexes, and cross-linking mass 
+spectrometry, provide high-resolution structural detail but are expensive, time-consuming, 
+and limited in throughput. The Protein Data Bank (PDB) contains roughly 220,000 
+experimentally determined structures, but this represents only a small fraction of the 
+proteins encoded across known genomes. The arrival of AlphaFold changed the landscape 
+dramatically: the AlphaFold Protein Structure Database now houses over 200 million 
+predicted structures [2], providing structural coverage for essentially all known protein 
+sequences. If computational interface predictors could operate reliably on these predicted 
+structures, it would enable interaction mapping at an unprecedented scale. 
+Several deep learning methods have recently achieved impressive accuracy for predicting 
+PPI binding interfaces from protein structure. PeSTo (Protein Structure Transformer) is a 
+geometric transformer that acts directly on atomic coordinates labeled only with element 
+names, requiring no handcrafted physicochemical features [3]. Trained on all biological 
+
+assemblies from the PDB, PeSTo can predict not only protein-protein interfaces but also 
+binding sites for nucleic acids, lipids, ions, and small molecules. ScanNet takes a 
+complementary approach, using an interpretable geometric deep learning architecture to 
+identify interface residues and antibody epitopes from solved structures [4]. HIGH-PPI 
+introduced a hierarchical graph framework that models both residue-level interactions 
+within proteins and protein-level interactions between them, capturing the natural multi-
+scale organization of PPI networks [5]. All these methods represent proteins as graphs—
+nodes for residues or atoms, edges for spatial proximity—and learn to classify surface 
+residues as belonging to an interface or not. 
+A critical but under-examined assumption in this field is that models trained on high-
+resolution experimental structures will generalize to predicted structures. AlphaFold 
+predictions, while highly accurate on average, are not uniformly reliable. AlphaFold’s own 
+per-residue confidence metric, pLDDT, classifies residues with scores above 90 as very 
+high confidence, 70-90 as confident, 50-70 as low confidence, and below 50 as very low 
+confidence (often corresponding to intrinsic disorder) [2, 6]. In the human proteome, only 
+36% of residues are modeled with very high confidence (pLDDT > 90), and the regions with 
+the lowest confidence tend to be surface-exposed loops and flexible termini [7]—precisely 
+the regions where many protein-protein binding events occur. AlphaFold has also been 
+shown to sometimes over-predict secondary structure in loop regions [8], producing 
+geometries that differ from native conformations in ways that could mislead interface 
+predictors. 
+Recent work by Yuan et al. directly quantified this concern [9]. In their development of 
+GPSite, a protein language model-based binding site predictor, they benchmarked PeSTo 
+and ScanNet on both experimental structures and structures predicted by ESMFold (a 
+language model-based structure predictor comparable to AlphaFold). PeSTo’s area under 
+the precision-recall curve (AUPR) dropped from 0.797 on experimental structures to 0.691 
+on predicted structures, and ScanNet’s AUPR fell from 0.476 to 0.399 [9]. These are 
+substantial declines that call into question the reliability of applying current interface 
+predictors to the AlphaFold proteome without further validation or adaptation. 
+Central Question 
+The central question of this project is: how much accuracy do structure-based GNN 
+interface predictors lose when applied to AlphaFold-predicted structures instead of 
+experimental ones, and can we identify the structural features that explain this 
+degradation? We address this through two complementary analyses: a controlled 
+benchmarking study and a feature-level error analysis. We then outline a proposed 
+adaptation strategy informed by the results. 
+
+Benchmarking on matched experimental and predicted structures. To isolate the effect of 
+structural quality on interface prediction, we would construct a carefully matched dataset. 
+Starting from proteins in the PDB that participate in characterized complexes with interface 
+annotations available through the PISA (Proteins, Interfaces, Surfaces, and Assemblies) 
+service [10], we would select cases where both a high-resolution experimental structure 
+(≤2.5 Å resolution) and a corresponding AlphaFold-predicted structure are available. This 
+paired design is critical: by running PeSTo on the experimental and predicted structure of 
+the same protein and comparing predictions against the same ground-truth interface 
+labels, any difference in performance can be attributed to the structural input rather than 
+differences in protein difficulty. 
+Performance would be evaluated using two standard metrics: ROC-AUC, which measures 
+discrimination between interface and non-interface residues across all classification 
+thresholds, and AUPR, which is more informative when the classes are imbalanced (as 
+they are here, since most surface residues are not part of an interface). Based on the 
+findings of Yuan et al. [9], we anticipate a measurable drop in AUPR on AlphaFold 
+structures. Their study used ESMFold-predicted structures; since AlphaFold generally 
+produces more accurate predictions than ESMFold [11], the degradation on AlphaFold 
+structures might be somewhat smaller, but the direction of the effect should be consistent. 
+The magnitude of this gap is the key quantity we aim to establish. 
+Error analysis: linking prediction failures to structural confidence. The second component 
+is a systematic analysis of where and why the predictions fail on AlphaFold structures. For 
+every residue in the test set, we would record: (a) whether the interface prediction is 
+correct or incorrect, (b) the AlphaFold pLDDT score at that position, and (c) the local RMSD 
+between the predicted and experimental structure in a neighborhood around that residue. 
+We hypothesize that prediction errors will be enriched in regions with low pLDDT scores 
+(below 70). This hypothesis is grounded in two observations from the literature. First, 
+AlphaFold’s official documentation states that regions with pLDDT below 70 have low 
+confidence, with backbone positions potentially deviating from the true structure [6]. 
+Second, a Nature Methods analysis found that even high-confidence AlphaFold predictions 
+can show inter-atomic distance deviations of 0.5–1 Å at longer range compared to 
+experimental structures, with moderate-to-high-confidence regions (pLDDT > 70) exhibiting 
+deviations of roughly 0.1 Å for nearby atom pairs and 0.7 Å for distant pairs [7]. Since 
+interface prediction relies heavily on the precise geometry of surface residues, even 
+modest coordinate shifts in loop regions could flip a borderline classification. 
+To test this, we would stratify the residues by pLDDT confidence band and compute 
+separate ROC-AUC and AUPR values for each stratum. We would also compute the 
+
+Pearson correlation between local RMSD (experimental vs. AlphaFold) and the per-residue 
+prediction error magnitude. If the correlation is strong and negative (higher RMSD 
+correlates with worse predictions), this would directly implicate structural inaccuracy as 
+the primary driver of the performance gap, rather than other factors such as systematic 
+biases in AlphaFold’s representation of surface electrostatics or hydrophobicity. 
+Proposed adaptation: pLDDT-augmented graph features. If the benchmarking and error 
+analysis confirm a meaningful, pLDDT-correlated performance gap, we would propose a 
+straightforward adaptation strategy. PeSTo’s architecture operates on atomic coordinates 
+labeled with element types. We would augment the node features in the residue graph with 
+the AlphaFold pLDDT score as an additional input channel, then fine-tune the pre-trained 
+model on a mixed dataset containing both experimental structures (with pLDDT set to 100, 
+representing perfect confidence) and AlphaFold-predicted structures (with their actual 
+pLDDT values). This approach requires no architectural changes to PeSTo—it merely gives 
+the model access to information about structural reliability that it currently lacks. 
+The rationale is that a confidence-aware model could learn to down-weight interface 
+predictions in regions where the input geometry is unreliable, rather than treating all atomic 
+coordinates as equally trustworthy. An alternative approach—trimming low-confidence 
+regions before prediction, as proposed by Tam et al. for general AlphaFold applications 
+[12]—risks discarding precisely the residues we most need to classify, since many binding 
+events involve flexible loops. By incorporating confidence as a feature rather than a filter, 
+the model retains the ability to make predictions everywhere while appropriately 
+calibrating its certainty. 
+Context from the broader PPI prediction landscape. It is worth noting that this question—
+transferability from experimental to predicted structures—is not unique to PPI interface 
+prediction. In drug discovery, a study on G-protein-coupled receptors found that while 
+AlphaFold models captured binding pocket geometry more accurately than traditional 
+homology models, docking predictions using AlphaFold structures were substantially less 
+accurate than those using experimental co-crystal structures [13]. Similarly, an evaluation 
+of AlphaFold3-predicted complexes for binding free energy prediction found an 8.6% 
+increase in RMSE compared to using experimental PDB structures [14]. These findings from 
+adjacent fields reinforce the premise that structural prediction accuracy matters for 
+downstream computational analyses, and that the gap needs to be explicitly measured 
+and addressed for each application domain. 
+Outlook 
+
+This work would establish the first systematic, quantitative baseline for how well geometric 
+deep learning models for PPI interface prediction transfer from experimental structures to 
+the AlphaFold structural proteome. The immediate practical outcome would be a set of 
+guidelines for when AlphaFold structures can be trusted as inputs for interface prediction 
+(e.g., above a certain pLDDT threshold) and when caution is warranted. 
+Looking further ahead, the pLDDT-augmented fine-tuning approach, if successful, could 
+serve as a general-purpose preprocessing strategy applicable to any geometry-based 
+interface predictor, not just PeSTo. The same principle of incorporating structural 
+confidence into the prediction pipeline could extend to other tasks that depend on surface 
+geometry, such as epitope prediction for vaccine design, molecular docking, and protein-
+nucleic acid interaction prediction. The dream experiment would be to apply a validated, 
+confidence-aware interface predictor across the entire human AlphaFold proteome to 
+generate a draft “interfaceome”, or a comprehensive map of all predicted binding surfaces 
+across all human proteins and compare it against known interaction networks to discover 
+novel, previously uncharacterized binding interfaces. PeSTo’s authors have already begun 
+exploring this direction with high-quality AlphaFold models [3], but a confidence-aware 
+version could extend this analysis to the many proteins whose AlphaFold models contain 
+substantial low-confidence regions, greatly expanding coverage. 
+  
+  
+
+Bibliography 
+[1] Zhang J, Durham J, Qian Cong. Revolutionizing protein-protein interaction prediction 
+with deep learning. Curr Opin Struct Biol. 2024 Apr;85:102775. doi: 
+10.1016/j.sbi.2024.102775. Epub 2024 Feb 7. PMID: 38330793. 
+[2] Varadi, M. et al. AlphaFold Protein Structure Database in 2024: providing structure 
+coverage for over 214 million protein sequences. Nucleic Acids Res. 52, D368–D375 (2024). 
+[3] Krapp, L.F ., Abriata, L.A., Cortés Rodriguez, F . et al. PeSTo: parameter-free geometric 
+deep learning for accurate prediction of protein binding interfaces. Nat Commun 14, 2175 
+(2023). https://doi.org/10.1038/s41467-023-37701-8 
+[4] Tubiana J, Schneidman-Duhovny D, Wolfson HJ. ScanNet: an interpretable geometric 
+deep learning model for structure-based protein binding site prediction. Nat Methods. 
+2022 Jun;19(6):730-739. doi: 10.1038/s41592-022-01490-7. Epub 2022 May 30. PMID: 
+35637310. 
+[5] Gao, Z., Jiang, C., Zhang, J. et al. Hierarchical graph learning for protein–protein 
+interaction. Nat Commun 14, 1093 (2023). https://doi.org/10.1038/s41467-023-36736-1 
+[6] AlphaFold/EMBL-EBI. pLDDT: Understanding local confidence. 
+https://www.ebi.ac.uk/training/online/courses/alphafold/ (accessed 2025). 
+[7] Terwilliger T.C. et al. AlphaFold predictions are valuable hypotheses and accelerate but 
+do not replace experimental structure determination. Nat Methods. 2024 Jan;21(1):110-
+116. doi: 10.1038/s41592-023-02087-4. Epub 2023 Nov 30. PMID: 38036854; PMCID: 
+PMC10776388. 
+[8] Stevens AO, He Y . Benchmarking the Accuracy of AlphaFold 2 in Loop Structure 
+Prediction. Biomolecules. 2022 Jul 14;12(7):985. doi: 10.3390/biom12070985. PMID: 
+35883541; PMCID: PMC9312937. 
+[9] Yuan, Q. et al. Genome-scale annotation of protein binding sites via language model 
+and geometric deep learning. eLife 13, e93695 (2024). 
+[10] Krissinel E, Henrick K. Inference of macromolecular assemblies from crystalline state. 
+J Mol Biol. 2007 Sep 21;372(3):774-97. doi: 10.1016/j.jmb.2007.05.022. Epub 2007 May 13. 
+PMID: 17681537. 
+[11] Lin Z. et al. Evolutionary-scale prediction of atomic-level protein structure with a 
+language model. Science. 2023 Mar 17;379(6637):1123-1130. doi: 
+10.1126/science.ade2574. Epub 2023 Mar 16. PMID: 36927031. 
+
+[12] Tam C, Iwasaki W. AlphaCutter: Efficient removal of non-globular regions from 
+predicted protein structures. Proteomics. 2023 Aug;23(16):e2300176. doi: 
+10.1002/pmic.202300176. Epub 2023 Jun 13. PMID: 37309722. 
+[13] Heo, L. et al. How accurately can one predict drug binding modes using AlphaFold 
+models? eLife 12, RP89386 (2023). 
+[14] Wee J, Wei GW. Evaluation of AlphaFold 3's Protein-Protein Complexes for Predicting 
+Binding Free Energy Changes upon Mutation. J Chem Inf Model. 2024 Aug 26;64(16):6676-
+6683. doi: 10.1021/acs.jcim.4c00976. Epub 2024 Aug 8. PMID: 39116039; PMCID: 
+PMC11351016. 
+ 

@@ -1,1 +1,10 @@
 .venv/
+
+data/
+results/
+logs/
+external/
+*.pdb
+*.cif
+__pycache__/
+.pytest_cache/
