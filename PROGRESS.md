@@ -10,16 +10,19 @@ Last updated: 2026-09-16.
 
 ## Where things stand
 
-**Phase 1 (candidate complex selection) is done and has run successfully.**
-Phases 2-10 are not started. See "Completed phases" below for what Phase 1
-actually produced and what it means for Phase 2.
+**Phases 1 and 2 are done and have run successfully.** Phases 3-10 are not
+started. See "Completed phases" below for what each produced and what it
+means for the next phase. Phase 2's leakage-sweep result (see below) is
+important context before starting Phase 3: the current candidate pool is
+too small and too leakage-heavy for the primary benchmark, and a full-scale
+Phase 1 rerun is recommended before investing further downstream.
 
-**Everything has been committed and pushed** to
-`https://github.com/Menrae/ppi-interface-transfer.git` (`main`), through
-the commit that set up scaffolding/environment/plan. Phase 1's code and
-outputs (this session's work) are **not yet committed** — confirm with the
-user before committing/pushing, per their standing preference to review
-first; don't assume a green light carries over between sessions.
+**Phase 1's code/outputs were committed and pushed** to
+`https://github.com/Menrae/ppi-interface-transfer.git` (`main`, commit
+`bd28a1b`). **Phase 2's code and outputs (this session's work) are not yet
+committed** — confirm with the user before committing/pushing, per their
+standing preference to review first; don't assume a green light carries
+over between sessions.
 
 ## What exists on disk right now
 
@@ -34,39 +37,64 @@ first; don't assume a green light carries over between sessions.
   (release date, not deposit date), `MAX_PROTEIN_ENTITIES=10`,
   `MIN_CHAIN_LENGTH=40`, `PLDDT_BANDS=(50,70,90)`,
   `INTERFACE_DISTANCE_CUTOFF_ANGSTROM=5.0`, `SEQUENCE_IDENTITY_CUTOFF=0.30`,
-  `LEAKAGE_FILTER_MODES=("homolog","exact_train","none")`.
+  `CLUSTER_MIN_COVERAGE=0.80`, `LEAKAGE_FILTER_MODES=("homolog","exact_train","none")`,
+  `MIN_TEST_CHAINS_TARGET=100`, `MIN_TEST_CHAINS_FLOOR=50`,
+  `LEAKAGE_SWEEP_IDENTITY_THRESHOLDS=(0.30,0.50,0.70,0.95)`.
 - `src/data/select_complexes.py` — Phase 1 implementation (see "Completed
   phases" below). `tests/test_select_complexes.py` (11 tests, passing) +
   `tests/fixtures/` (small saved RCSB/SIFTS JSON/TSV fixtures, no network
   needed to run the tests).
+- `src/data/cluster_and_split.py` — Phase 2 implementation (see "Completed
+  phases" below). `tests/test_cluster_and_split.py` (14 tests, passing,
+  including one real end-to-end MMseqs2 invocation on tiny synthetic
+  sequences — skipped automatically if the binary is absent).
 - `docs/Project_Proposal.pdf` + `docs/proposal.txt` — the original proposal
   and its extracted text (via `pypdf`, now in `requirements.txt`).
+- `README.md` — rewritten for a general-science-background public audience
+  (plain-language PPI/AlphaFold/PeSTo/pLDDT background, phase-by-phase
+  approach, current status, repro instructions, key references w/ DOIs).
+  Update its "Current status" section after each phase, same as this file.
+- `external/mmseqs/bin/mmseqs` — **installed 2026-09-16**: official static
+  AVX2 Linux build (commit `d401e78c2d18a822cdb1527d7464a043f6035a15`),
+  gitignored. The AVX2 build was used (not SSE4.1) since `/proc/cpuinfo`
+  confirmed AVX2 support in this container.
 - `data/raw/pesto_splits/` — **already downloaded and cached**: PeSTo's
   three dataset-split files from `github.com/LBM-EPFL/PeSTo/data/datasets/`
   (`subunits_train_set.txt` 376,216 lines, `subunits_test_set.txt` 97,424
   lines, `subunits_validation_set.txt` 101,700 lines, `bc-30.out`,
-  `README.md`). These are real cached files, not placeholders — Phase 2 can
-  read them directly instead of re-downloading.
+  `README.md`). Note: this `README.md` itself states "the definition of
+  test and validation set is swapped in this source code compared to the
+  commonly used definition" — independent confirmation of the train-code-
+  vs-paper discrepancy already recorded in `PLAN.md`'s evidence table.
+  `data/raw/pesto_splits/pesto_all_splits.fasta` (560,829 sequences, Phase 2
+  output) is also cached here now.
+- `data/raw/pdb_seqres/pdb_seqres.txt.gz` — **new, Phase 2**: bulk
+  PDBID_CHAIN→sequence FASTA for the entire PDB (~1.16M records, ~67 MB),
+  from `files.wwpdb.org`. Used instead of per-chain RCSB calls to resolve
+  sequences for PeSTo's ~575k split-file chains in one download.
 - `.venv/` — Python 3.11 venv with everything in `requirements.txt`
   installed (biotite, biopython, gemmi, numpy/scipy/pandas/pyarrow,
   scikit-learn, matplotlib, seaborn, requests, tqdm, pytest, torch+cpu,
   pypdf). **Not yet installed:** `statsmodels` (needed for Phase 8's VIF
-  check — install and re-`pip freeze` when starting that phase), MMseqs2
-  (needed for Phase 2's homology search — no system package manager access
-  in this container; plan is a static binary in `external/mmseqs/`, not
-  yet fetched).
+  check — install and re-`pip freeze` when starting that phase).
 - `data/interim/candidates.csv` (1275 rows), `data/interim/phase1_attrition.csv`
   — Phase 1 outputs, see "Completed phases" below.
+- `data/interim/{sequences.fasta,clusters.tsv,candidates_dedup.csv,
+  pesto_homology_search.tsv,leakage_threshold_sweep.csv,phase2_attrition.csv}`
+  — Phase 2 outputs, see "Completed phases" below.
 - `data/raw/rcsb/{search,entries,polymer_entities}/` — cached RCSB API
   responses from the Phase 1 run (500-entry cap); reruns of
   `select_complexes` against the same query/entries are fully offline.
 - `data/raw/sifts/pdb_chain_uniprot.tsv.gz` — cached bulk SIFTS file
   (~986k chain mappings loaded from it).
-- `logs/select_complexes.log` — full DEBUG log of the Phase 1 run (every
-  dropped chain + every SIFTS disagreement, with reasons).
-- Empty scaffold directories: `data/processed`, `results/`, `notebooks/`,
-  `external/` (PeSTo repo itself has not been checked out here yet, only
-  its split-list files were fetched for investigation).
+- `data/raw/mmseqs_work/` — MMseqs2 intermediate cluster/search DBs and tmp
+  dirs from the Phase 2 run (cache, not a curated output).
+- `logs/select_complexes.log`, `logs/cluster_and_split.log` — full DEBUG
+  logs of the Phase 1 and Phase 2 runs respectively.
+- Empty scaffold directories: `data/processed`, `results/`, `notebooks/`
+  (PeSTo's model repo itself has not been checked out here yet — only its
+  split-list files were fetched for investigation; that checkout is a
+  Phase 6 input).
 
 ## Decisions already made (don't re-derive these — see `PLAN.md` for full reasoning)
 
@@ -105,10 +133,17 @@ first; don't assume a green light carries over between sessions.
   embedding layer must be widened for the pLDDT channel (Phase 9). The
   Phase 9 CPU smoke test must use PeSTo's real released checkpoint, not a
   random init, to verify the widened layer reproduces original outputs.
-- **DSSP/freesasa/MMseqs2 are not installed** and there's no root access in
-  this container — fallbacks are `biotite.structure.annotate_sse` (DSSP),
-  `biotite.structure.sasa` (freesasa), and a static MMseqs2 binary in
-  `external/` (MMseqs2 fallback not yet fetched).
+- **DSSP/freesasa are not installed** and there's no root access in this
+  container — fallbacks are `biotite.structure.annotate_sse` (DSSP) and
+  `biotite.structure.sasa` (freesasa). **MMseqs2 is now installed**
+  (`external/mmseqs/bin/mmseqs`, static AVX2 build) — see "What exists on
+  disk" above; the Biopython-pairwise fallback was not needed.
+- **Cluster representative selection (Phase 2) is deterministic and
+  independent of MMseqs2's own internal representative choice:** best
+  (lowest) resolution, then longest chain, then ascending `PDBID_CHAINID`
+  string. MMseqs2's `easy-cluster` is used only to assign cluster
+  membership; `src/data/cluster_and_split.py` picks the actual
+  representative itself so the choice is reproducible and documented.
 - **`.gitignore` gotcha, fixed 2026-09-16:** the original patterns
   (`data/`, `results/`, `logs/`, `external/`, no leading slash) matched
   those directory names at *any* depth, not just repo root — so
@@ -172,24 +207,102 @@ overstate biological diversity** — don't use them as a proxy for Phase 7's
 target sample size without going through Phase 2 first. No antibody-chain
 dominance was found in this slice (only the one incidental IgE hit above).
 
+### Phase 2 — Redundancy reduction + PeSTo-overlap flagging (2026-09-16)
+
+`src/data/cluster_and_split.py`, runnable as
+`.venv/bin/python -m src.data.cluster_and_split`. Run against Phase 1's
+500-entry-slice candidate pool (1275 chains) — **not yet run at full
+scale**, see "Next step" below. See `PLAN.md` Phase 2 for the
+module/output-path reorganization vs. the original sketch.
+
+**Attrition (chain-level, from `data/interim/phase2_attrition.csv`):**
+
+| stage | n_before | n_dropped | n_remaining |
+| --- | --- | --- | --- |
+| initial_candidate_chains | 1275 | 0 | 1275 |
+| missing_cached_sequence | 1275 | 0 | 1275 |
+| redundancy_clustering | 1275 | 1129 | 146 |
+
+All 1275 candidate chains had a cached canonical sequence (Phase 1's
+polymer-entity JSON cache was complete — 0 dropped). MMseqs2 `easy-cluster`
+(`--min-seq-id 0.30 -c 0.80 --cov-mode 0`) collapsed 1275 chains into **146
+clusters**; the largest clusters (204 and 184 members) are exactly the two
+fragment-screening campaigns flagged as a Phase 1 finding above (yeast
+Prp8–Aar2, bovine tubulin), confirming that finding. 135 of 146
+representatives' UniProt accessions are unique (close to the full 146,
+since each cluster is essentially one biological pair).
+
+**PeSTo split sequence resolution:** loaded all 376,216 train / 97,425 test
+/ 101,701 validation chains (line counts match `PLAN.md`'s evidence table);
+union = 575,342 distinct chains, of which 560,829 (97.5%) had a sequence in
+`pdb_seqres.txt.gz` (the other 14,513 are presumably obsolete/superseded
+PDB IDs — logged, excluded from the search target, not silently merged in).
+**Bug found and fixed during this run:** the first pass through
+`load_pesto_split_membership` uppercased the whole `PDBID_CHAINID` string
+before deduplicating, which silently collapsed case-distinct chains (PDB
+chain IDs are case-sensitive — e.g. chain `C` and chain `c` can be
+genuinely different chains in the same entry) — this undercounted the
+union by ~27k entries (548,654 vs. the correct 575,342). Fixed to only
+uppercase the PDB ID half of each line; `tests/test_cluster_and_split.py`
+now has a regression test
+(`test_load_pesto_split_membership_preserves_chain_id_case`). The fix did
+**not** change the leakage-flag results below (same 131/146 and 39/146,
+same sweep table) — the case-collapsed entries happened not to affect any
+representative's best hit — but don't assume that'll always be true; this
+is the kind of bug that stays invisible until the target file is large
+enough for it to matter.
+
+**Leakage search result — the important finding:** of the 146
+representatives, **131 (89.7%) are flagged `pesto_homolog_overlap`** (≥30%
+identity to the train+test+validation union) and 39 (26.7%) are flagged
+`pesto_exact_train_overlap` (literal ID match to the training file alone).
+The gap between those two numbers is exactly what motivated using
+sequence-level rather than exact-ID leakage control in the first place —
+most of the true overlap would have been invisible to ID matching alone.
+
+**Leakage threshold sweep (`data/interim/leakage_threshold_sweep.csv`),
+against `MIN_TEST_CHAINS_TARGET=100` / `MIN_TEST_CHAINS_FLOOR=50`:**
+
+| mode | n_survive | meets target (100) | meets floor (50) |
+| --- | --- | --- | --- |
+| identity < 0.30 (primary) | 15 | No | No |
+| identity < 0.50 | 25 | No | No |
+| identity < 0.70 | 27 | No | No |
+| identity < 0.95 | 30 | No | No |
+| exact-ID (train only) | 107 | Yes | Yes |
+
+**Implication, per `PLAN.md` confound (e):** on this candidate pool, the
+primary (`"homolog"`) mode is well under even the 50-chain hard floor, and
+stays under it all the way out to 95% identity — this is not a borderline
+case fixable by loosening the cutoff slightly. Per the pre-agreed
+mitigation, the leakage filter should **not** be loosened to hit the
+target; Phase 7 should stratify by `pesto_homolog_overlap` status and lean
+on the `"exact_train"`/`"none"` sensitivity modes, which do clear the
+target. However, the more likely explanation is simply that **this
+candidate pool is a small, non-random 500-entry test slice** (see Phase 1's
+fragment-screening-campaign finding) — a full-scale Phase 1 run should
+produce enough non-redundant, non-overlapping clusters to reassess this
+before concluding the primary analysis is structurally underpowered.
+
 ## Next step
 
-**Implement Phase 2** (`PLAN.md` "Phase 2 — Redundancy reduction +
-PeSTo-overlap flagging"): build `src/data/sequences.py`,
-`src/pipeline/redundancy_reduction.py`, `src/data/pesto_overlap.py` plus
-tests. Needs: (1) sequences for the 1275 candidate chains (RCSB
-polymer-entity API, or reuse `entity_poly.pdbx_seq_one_letter_code_can`
-already present in the cached `data/raw/rcsb/polymer_entities/*.json` from
-Phase 1 — check there before re-fetching); (2) a static MMseqs2 binary
-fetched into `external/mmseqs/` (not yet done — no root/apt in this
-container, see `PLAN.md` §6 Risks); (3) sequences for PeSTo's
-train+test+validation chains (the split files are already cached at
-`data/raw/pesto_splits/`, but their sequences still need to be fetched).
+**Rerun Phase 1 at full scale first**, then rerun Phase 2 on the result.
+`select_complexes` reported 10,774 total hits for the full filter when last
+run with `--max-entries 500`; rerunning with a much larger `--max-entries`
+(or none) will take longer (more RCSB API calls, all cached/resumable) but
+is needed before the Phase 2 leakage-sweep numbers above can be trusted as
+representative — the current 15-chain primary-mode survivor count is
+plausibly an artifact of the small, campaign-heavy 500-entry slice rather
+than a true property of the full candidate pool. Re-run
+`.venv/bin/python -m src.data.cluster_and_split` afterward (it will
+re-cluster from scratch since `data/interim/candidates.csv` will have
+changed; the PeSTo-splits/`pdb_seqres.txt.gz` caches are reusable as-is).
 
-Before running Phase 2 at scale, consider running Phase 1 without
-`--max-entries` (or with a larger cap) first — the 500-entry test run is
-a small, non-random slice (see fragment-screening finding above), so
-Phase 2's redundancy numbers on just this slice won't be representative.
+Once a representative-scale Phase 2 result exists, proceed to **Phase 3 —
+Download PDB mmCIFs and AlphaFold DB models** (`PLAN.md` Phase 3):
+`src/data/download_pdb.py`, `src/data/download_alphafold.py`,
+`src/pipeline/download_structures.py`, reading from
+`data/interim/candidates_dedup.csv`.
 
 Open question #3 from `PLAN.md` §5 (the Phase 9 significance threshold)
 is still unresolved and still cheap to decide now.

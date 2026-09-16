@@ -59,6 +59,12 @@ MIN_CHAIN_LENGTH = 40
 # entries to avoid redundancy/leakage.
 SEQUENCE_IDENTITY_CUTOFF = 0.30
 
+# Minimum alignment coverage (of the shorter sequence) required for an
+# MMseqs2 hit to count, both for candidate redundancy clustering and for
+# the PeSTo-overlap homology search. Guards against short local matches
+# (e.g. a shared domain) being treated as full-chain redundancy/leakage.
+CLUSTER_MIN_COVERAGE = 0.8
+
 # How Phase 7 benchmarking may filter out chains that overlap PeSTo's own
 # training/model-selection data. "homolog": exclude anything with >=
 # SEQUENCE_IDENTITY_CUTOFF identity to PeSTo's train+test+validation splits
@@ -66,3 +72,17 @@ SEQUENCE_IDENTITY_CUTOFF = 0.30
 # matches to PeSTo's published training-set file (sensitivity A).
 # "none": no leakage filter at all (sensitivity B). See PLAN.md Phase 2/7.
 LEAKAGE_FILTER_MODES = ("homolog", "exact_train", "none")
+
+# Sample-size targets for the primary (leakage-filtered) benchmark set.
+# See PLAN.md confound (e) / Phase 7: below MIN_TEST_CHAINS_FLOOR, don't
+# loosen the leakage filter to hit the target -- stratify/report sensitivity
+# modes instead.
+MIN_TEST_CHAINS_TARGET = 100
+MIN_TEST_CHAINS_FLOOR = 50
+
+# Sequence-identity thresholds swept in Phase 2's leakage threshold-sweep
+# report (data/interim/leakage_threshold_sweep.csv), to show how the
+# survivor count against MIN_TEST_CHAINS_TARGET/FLOOR changes with the
+# identity cutoff without pre-committing to a looser cutoff than
+# SEQUENCE_IDENTITY_CUTOFF (0.30, the lowest value swept).
+LEAKAGE_SWEEP_IDENTITY_THRESHOLDS = (0.30, 0.50, 0.70, 0.95)

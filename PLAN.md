@@ -70,7 +70,17 @@ exists on disk.
   Comfortably over the ~200-complex flag threshold. Full attrition and
   distribution numbers are in `PROGRESS.md`.
 
-### Phase 2 — Redundancy reduction + PeSTo-overlap flagging (sequence-level)
+### Phase 2 — Redundancy reduction + PeSTo-overlap flagging (sequence-level) — **DONE** (2026-09-16)
+
+Implemented as a single module, `src/data/cluster_and_split.py`, rather than
+the three sketched below (`src/data/sequences.py`,
+`src/pipeline/redundancy_reduction.py`, `src/data/pesto_overlap.py`) —
+following the same precedent as Phase 1: none of the pieces are reused
+elsewhere, so one module covers sequence loading, MMseqs2 clustering,
+PeSTo-split sequence lookup, and the homology search together. Output
+filenames and the on-disk format (CSV/TSV throughout, not parquet) are also
+corrected below to match what actually exists. The train/validation/test
+evidence table immediately below is unchanged and still authoritative.
 
 **Resolving the train/validation/test naming ambiguity.** Downloaded all
 three PeSTo split files directly (now cached at `data/raw/pesto_splits/`)
@@ -95,42 +105,93 @@ assuming either one is a clean, untouched holdout — no chain is treated as
 "only overlapping PeSTo's real test set and therefore still eligible,"
 because we cannot say with confidence which file that is.
 
-- **Inputs:** `data/interim/candidate_complexes.parquet`; chain sequences
-  from the RCSB polymer-entity API; sequences for every chain in
-  `data/raw/pesto_splits/subunits_{train,test,validation}_set.txt` (all
-  three, per the resolution above), fetched from RCSB and cached.
-- **Config used:** `SEQUENCE_IDENTITY_CUTOFF` (0.30).
-- **Outputs:**
-  - `data/interim/sequences.fasta` (candidate chains)
-  - `data/interim/redundancy_clusters.tsv` (candidate chain → cluster ID,
-    for the 30%-identity redundancy reduction among candidates themselves)
-  - `data/raw/pesto_splits/subunits_{train,test,validation}_set.txt`
-    (already cached — verified present, see table above)
-  - `data/raw/pesto_splits/pesto_all_splits.fasta` (sequences for the union
-    of all three PeSTo split files)
-  - `data/interim/pesto_homology_search.tsv` (MMseqs2 search hits: candidate
-    chain → matched PeSTo chain(s), % identity)
-  - `data/processed/nonredundant_complexes.parquet` — adds `cluster_id`,
-    `cluster_representative` (bool), `pesto_homolog_overlap` (bool — hit at
-    ≥`SEQUENCE_IDENTITY_CUTOFF` against the train+test+validation union),
-    `pesto_exact_train_overlap` (bool — exact `PDBID_CHAINID` match against
-    `subunits_train_set.txt` only, secondary/narrower flag)
-- **src modules:** `src/data/sequences.py`, `src/pipeline/redundancy_reduction.py`,
-  `src/data/pesto_overlap.py` (runs MMseqs2 `search` of candidate sequences
-  against `pesto_all_splits.fasta` at `SEQUENCE_IDENTITY_CUTOFF`; also does
-  the exact-ID lookup against `subunits_train_set.txt` alone)
-- **Tests:** `tests/test_sequences.py`, `tests/test_redundancy_reduction.py`
-  (clustering on synthetic sequences with known identity, verified against
-  `SEQUENCE_IDENTITY_CUTOFF`), `tests/test_pesto_overlap.py` (a synthetic
-  candidate sequence built as a point mutant of a fixture PeSTo-split
-  sequence, at identity above/below the cutoff, is flagged/not-flagged
-  correctly for `pesto_homolog_overlap`; exact-ID match logic is tested
-  separately for `pesto_exact_train_overlap`)
-- **Success criterion:** no two retained candidate chains have pairwise
-  identity above the config cutoff; `pesto_homolog_overlap` and
-  `pesto_exact_train_overlap` are both non-null for 100% of rows; MMseqs2
-  search log records how many candidate chains hit the PeSTo split union
-  and at what identity; dropped-duplicate count logged with reason.
+*(Minor footnote, confirmed 2026-09-16: `subunits_test_set.txt` and
+`subunits_validation_set.txt` are each missing a trailing newline, so
+`wc -l` undercounts their true chain count by exactly one --
+`src/data/cluster_and_split.py` correctly loads 97,425 and 101,701 chains
+respectively. This still matches the paper's stated 97,424/101,700, which
+are themselves `wc -l`-style counts.)*
+
+- **Inputs (actual):** `data/interim/candidates.csv` (Phase 1 output); chain
+  sequences reused from Phase 1's cached RCSB polymer-entity JSON
+  (`entity_poly.pdbx_seq_one_letter_code_can`) — no re-fetch needed; PeSTo
+  split-file sequences resolved via the bulk `pdb_seqres.txt.gz` file from
+  `files.wwpdb.org` (one ~67 MB download covering every PDB chain, cached),
+  rather than per-chain RCSB calls, since the three split files together
+  list ~575k chains and per-chain API calls at that volume were infeasible.
+- **Config used:** `SEQUENCE_IDENTITY_CUTOFF` (0.30), `CLUSTER_MIN_COVERAGE`
+  (0.80, new this phase), `MIN_TEST_CHAINS_TARGET` (100, new — formalizes
+  the number already used in prose), `MIN_TEST_CHAINS_FLOOR` (50, new,
+  likewise), `LEAKAGE_SWEEP_IDENTITY_THRESHOLDS` (0.30/0.50/0.70/0.95, new).
+- **MMseqs2:** installed as the official static AVX2 Linux build at
+  `external/mmseqs/bin/mmseqs` (gitignored, not conda) — commit
+  `d401e78c2d18a822cdb1527d7464a043f6035a15`.
+- **Outputs (actual):**
+  - `data/interim/sequences.fasta` — candidate chain sequences
+  - `external/mmseqs/` — cached MMseqs2 static binary (see above)
+  - `data/raw/pdb_seqres/pdb_seqres.txt.gz` — cached bulk sequence file
+  - `data/raw/pesto_splits/pesto_all_splits.fasta` — sequences for the
+    union of all three PeSTo split files (chains with no entry in
+    `pdb_seqres.txt.gz`, e.g. obsolete/superseded PDB IDs, are logged and
+    excluded from the search target set, not silently merged in)
+  - `data/raw/mmseqs_work/` — MMseqs2 intermediate cluster/search DBs and
+    tmp dirs (cache, not a final output)
+  - `data/interim/clusters.tsv` — `cluster_id, pdb_id, chain_id,
+    is_representative`, one row per candidate chain (`cluster_id` is the
+    deterministically-chosen representative's own `PDBID_CHAINID`, not
+    MMseqs2's internal representative choice — see representative-selection
+    rule below)
+  - `data/interim/pesto_homology_search.tsv` — one row per cluster
+    representative: max identity + best-hit ID against each of PeSTo's
+    train/test/validation splits individually, plus `max_identity_any`
+  - `data/interim/candidates_dedup.csv` — one row per cluster
+    representative: all `candidates.csv` columns plus `cluster_id`,
+    `cluster_size`, the per-split identity columns above,
+    `pesto_homolog_overlap` (bool — `max_identity_any` ≥
+    `SEQUENCE_IDENTITY_CUTOFF` against the train+test+validation union, the
+    recorded leakage-control decision from the evidence table above),
+    `pesto_exact_train_overlap` (bool — exact `PDBID_CHAINID` membership in
+    `subunits_train_set.txt` only, secondary/narrower flag). This supersedes
+    the originally-sketched `nonredundant_complexes.parquet`.
+  - `data/interim/leakage_threshold_sweep.csv` — for each swept identity
+    threshold plus an exact-ID-only mode: `n_survive`, `meets_target`
+    (≥`MIN_TEST_CHAINS_TARGET`), `meets_floor` (≥`MIN_TEST_CHAINS_FLOOR`).
+    This is a reporting table only — it does not change
+    `SEQUENCE_IDENTITY_CUTOFF` or which chains are flagged in
+    `candidates_dedup.csv`; see PROGRESS.md for the first run's numbers and
+    what they imply for confound (e) / Phase 7.
+  - `data/interim/phase2_attrition.csv` — chain-level attrition
+    (`initial_candidate_chains` → `missing_cached_sequence` →
+    `redundancy_clustering`)
+- **Representative selection (deterministic, not MMseqs2's internal pick):**
+  best (lowest) resolution, then longest chain (`seq_length`), then
+  ascending `PDBID_CHAINID` string as a final tiebreak.
+- **src modules:** `src/data/cluster_and_split.py` — sequence loading
+  (reused from Phase 1's cache), `mmseqs easy-cluster` invocation +
+  deterministic representative selection, bulk `pdb_seqres.txt.gz`
+  streaming lookup for PeSTo split sequences, `mmseqs easy-search` of
+  representatives against the PeSTo split union, leakage flag computation,
+  and the threshold sweep.
+- **Tests:** `tests/test_cluster_and_split.py` (14 tests, all passing) —
+  deterministic representative selection (including tie-breaks and
+  order-independence) on a hand-built fixture; parsing of saved MMseqs2
+  `easy-cluster`/`easy-search` output fixtures in `tests/fixtures/`; leakage
+  flag computation (best hit + identity per split, `pesto_homolog_overlap`,
+  `pesto_exact_train_overlap`) on synthetic hits; threshold-sweep survivor
+  counts against `MIN_TEST_CHAINS_TARGET`/`FLOOR` on a synthetic table; bulk
+  `pdb_seqres.txt.gz` lookup on a synthetic gzip fixture; one test that
+  invokes the real MMseqs2 binary end-to-end on tiny synthetic sequences,
+  marked to skip if the binary is absent.
+- **Success criterion:** met on the first live run (2026-09-16, run against
+  Phase 1's 500-entry-slice candidate pool): every retained representative
+  has non-null `pesto_homolog_overlap`/`pesto_exact_train_overlap`; the
+  MMseqs2 command lines and hit counts are logged
+  (`logs/cluster_and_split.log`); the dropped-duplicate count is logged with
+  reason at the `redundancy_clustering` attrition stage. See PROGRESS.md for
+  the actual cluster count, leakage rates, and threshold-sweep table — the
+  primary (`"homolog"`-mode) survivor count came in well under
+  `MIN_TEST_CHAINS_FLOOR` on this small candidate pool, which is expected to
+  improve once Phase 1 is rerun at full scale (see PROGRESS.md "Next step").
 
 ### Phase 3 — Download PDB mmCIFs and AlphaFold DB models
 - **Inputs:** `data/processed/nonredundant_complexes.parquet`.
@@ -480,11 +541,10 @@ that gate is reached. Remaining:
 
 ## 6. Risks
 
-- **MMseqs2** — not installed, no `apt`/root access in this container.
-  Fallback: download a static MMseqs2 binary into `external/mmseqs/` (no
-  root required); if that's blocked too, fall back to a slower pairwise
-  Biopython-alignment clustering (only viable if the candidate set stays in
-  the low hundreds after Phase 1).
+- **MMseqs2** — **resolved (2026-09-16):** the official static AVX2 Linux
+  build installed cleanly (no root required) at `external/mmseqs/bin/mmseqs`
+  (commit `d401e78c2d18a822cdb1527d7464a043f6035a15`); the Biopython-fallback
+  plan was not needed.
 - **DSSP (`mkdssp`)** — not installed, no root access. Fallback:
   `biotite.structure.annotate_sse` (confirmed available; 3-state P-SEA-style
   assignment instead of DSSP's 8-state) — document this as a resolution
