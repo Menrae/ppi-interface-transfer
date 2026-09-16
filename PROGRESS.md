@@ -10,19 +10,27 @@ Last updated: 2026-09-16.
 
 ## Where things stand
 
-**Phases 1 and 2 are done and have run successfully.** Phases 3-10 are not
-started. See "Completed phases" below for what each produced and what it
-means for the next phase. Phase 2's leakage-sweep result (see below) is
-important context before starting Phase 3: the current candidate pool is
-too small and too leakage-heavy for the primary benchmark, and a full-scale
-Phase 1 rerun is recommended before investing further downstream.
+**Phases 1 and 2 are done, and both have now been run at full scale**
+(uncapped Phase 1 search, all 10,774 hits; Phase 2 unchanged on the result).
+Phases 3-10 are not started -- **do not start Phase 3 without an explicit
+go-ahead**: the leakage-threshold decision below is the user's to make, not
+pre-decided by this pipeline. See "Completed phases" for the full-scale
+numbers and "Next step" for exactly what's pending.
 
-**Phase 1's code/outputs were committed and pushed** to
-`https://github.com/Menrae/ppi-interface-transfer.git` (`main`, commit
-`bd28a1b`). **Phase 2's code and outputs (this session's work) are not yet
-committed** — confirm with the user before committing/pushing, per their
-standing preference to review first; don't assume a green light carries
-over between sessions.
+The earlier 500-entry pilot run (Phase 1 + Phase 2) is preserved at
+`data/interim/pilot_500/` for before/after comparison, not overwritten.
+The pilot's leakage-sweep shortfall (primary mode well under
+`MIN_TEST_CHAINS_FLOOR`) turned out to be a small/non-representative-sample
+artifact, not a structural problem -- the full-scale run clears both
+`MIN_TEST_CHAINS_TARGET` and `MIN_TEST_CHAINS_FLOOR` at every swept
+threshold.
+
+**Phase 1 and Phase 2's first-run code/outputs were committed and pushed**
+to `https://github.com/Menrae/ppi-interface-transfer.git` (`main`, commits
+`bd28a1b` and `f7b5c81`). **This session's changes (full-scale rerun code +
+outputs) are not yet committed** — confirm with the user before
+committing/pushing, per their standing preference to review first; don't
+assume a green light carries over between sessions.
 
 ## What exists on disk right now
 
@@ -41,13 +49,16 @@ over between sessions.
   `MIN_TEST_CHAINS_TARGET=100`, `MIN_TEST_CHAINS_FLOOR=50`,
   `LEAKAGE_SWEEP_IDENTITY_THRESHOLDS=(0.30,0.50,0.70,0.95)`.
 - `src/data/select_complexes.py` — Phase 1 implementation (see "Completed
-  phases" below). `tests/test_select_complexes.py` (11 tests, passing) +
-  `tests/fixtures/` (small saved RCSB/SIFTS JSON/TSV fixtures, no network
-  needed to run the tests).
-- `src/data/cluster_and_split.py` — Phase 2 implementation (see "Completed
-  phases" below). `tests/test_cluster_and_split.py` (14 tests, passing,
-  including one real end-to-end MMseqs2 invocation on tiny synthetic
-  sequences — skipped automatically if the binary is absent).
+  phases" below). Now includes RCSB GraphQL-batched entry/entity fetch (with
+  REST single-item fallback) and deposition-group collapse, added this
+  session for the full-scale rerun. `tests/test_select_complexes.py` (21
+  tests, passing) + `tests/fixtures/` (small saved RCSB/SIFTS/GraphQL
+  JSON/TSV fixtures, no network needed to run the tests).
+- `src/data/cluster_and_split.py` — Phase 2 implementation, **unchanged
+  this session** (rerun as-is on the full candidate set, per this session's
+  brief). `tests/test_cluster_and_split.py` (15 tests, passing, including
+  one real end-to-end MMseqs2 invocation on tiny synthetic sequences —
+  skipped automatically if the binary is absent).
 - `docs/Project_Proposal.pdf` + `docs/proposal.txt` — the original proposal
   and its extracted text (via `pypdf`, now in `requirements.txt`).
 - `README.md` — rewritten for a general-science-background public audience
@@ -77,20 +88,38 @@ over between sessions.
   scikit-learn, matplotlib, seaborn, requests, tqdm, pytest, torch+cpu,
   pypdf). **Not yet installed:** `statsmodels` (needed for Phase 8's VIF
   check — install and re-`pip freeze` when starting that phase).
-- `data/interim/candidates.csv` (1275 rows), `data/interim/phase1_attrition.csv`
-  — Phase 1 outputs, see "Completed phases" below.
+- `data/interim/candidates.csv` (22,887 rows), `data/interim/phase1_attrition.csv`
+  — **full-scale** Phase 1 outputs (this session), see "Completed phases"
+  below.
 - `data/interim/{sequences.fasta,clusters.tsv,candidates_dedup.csv,
   pesto_homology_search.tsv,leakage_threshold_sweep.csv,phase2_attrition.csv}`
-  — Phase 2 outputs, see "Completed phases" below.
+  — **full-scale** Phase 2 outputs (this session), see "Completed phases"
+  below.
+- `data/interim/leakage_threshold_sweep_by_source.csv`,
+  `data/interim/leakage_by_release_year.csv` — **new, this session**: the
+  two extra leakage breakdowns requested to inform the (still-pending)
+  threshold decision. Produced by a one-off analysis script (not part of
+  the Phase 2 pipeline module, since `cluster_and_split.py` was run
+  unchanged) reading `candidates_dedup.csv`. See "Completed phases" below
+  for the numbers.
+- `data/interim/pilot_500/` — the original 500-entry pilot run's Phase 1 +
+  Phase 2 outputs (`candidates.csv`, `phase1_attrition.csv`,
+  `candidates_dedup.csv`, `clusters.tsv`, `pesto_homology_search.tsv`,
+  `leakage_threshold_sweep.csv`, `phase2_attrition.csv`, `sequences.fasta`),
+  moved here (not overwritten) before the full-scale rerun, for
+  before/after comparison.
 - `data/raw/rcsb/{search,entries,polymer_entities}/` — cached RCSB API
-  responses from the Phase 1 run (500-entry cap); reruns of
-  `select_complexes` against the same query/entries are fully offline.
+  responses; now covers the full 10,774-hit search (previously just the
+  500-entry pilot slice), fetched primarily via the new GraphQL batching
+  path. `data/raw/rcsb/graphql_group_batches/`,
+  `data/raw/rcsb/graphql_entry_batches/` — new cached raw GraphQL batch
+  responses.
 - `data/raw/sifts/pdb_chain_uniprot.tsv.gz` — cached bulk SIFTS file
   (~986k chain mappings loaded from it).
 - `data/raw/mmseqs_work/` — MMseqs2 intermediate cluster/search DBs and tmp
-  dirs from the Phase 2 run (cache, not a curated output).
+  dirs from the (now full-scale) Phase 2 run (cache, not a curated output).
 - `logs/select_complexes.log`, `logs/cluster_and_split.log` — full DEBUG
-  logs of the Phase 1 and Phase 2 runs respectively.
+  logs of the full-scale Phase 1 and Phase 2 runs respectively.
 - Empty scaffold directories: `data/processed`, `results/`, `notebooks/`
   (PeSTo's model repo itself has not been checked out here yet — only its
   split-list files were fetched for investigation; that checkout is a
@@ -144,6 +173,25 @@ over between sessions.
   string. MMseqs2's `easy-cluster` is used only to assign cluster
   membership; `src/data/cluster_and_split.py` picks the actual
   representative itself so the choice is reproducible and documented.
+- **RCSB metadata fetch uses batched GraphQL, not per-entry REST.** For the
+  full-scale run, `data.rcsb.org/graphql` fetches an entry plus all its
+  polymer entities in one call, batched `GRAPHQL_BATCH_SIZE=200` IDs per
+  request (~125 entries/sec measured) instead of one REST call per entry
+  plus one per entity. The GraphQL response is split into the exact same
+  per-entry/per-entity cache-file shape the old REST fetchers wrote, so
+  every downstream parser is unchanged. IDs GraphQL doesn't return fall
+  back to the original single-item REST calls. Resumable at per-entry
+  cache-file granularity regardless of batch boundaries.
+- **Deposition groups (e.g. PanDDA fragment-screening campaigns) are
+  collapsed to one best-resolution entry per group before the expensive
+  fetch**, using RCSB's real `rcsb_entry_group_membership` field filtered
+  to `aggregation_method == "matching_deposit_group_id"` specifically (not
+  RCSB's separate, unrelated sequence-similarity browsing groups). This is
+  a new, logged, entry-level Phase 1 attrition stage
+  (`deposition_group_collapse`) — added once this authoritative field was
+  found; it's complementary to, not a replacement for, Phase 2's chain-level
+  MMseqs2 clustering, which still independently collapses near-duplicate
+  sequences from campaigns not tagged with this field.
 - **`.gitignore` gotcha, fixed 2026-09-16:** the original patterns
   (`data/`, `results/`, `logs/`, `external/`, no leading slash) matched
   those directory names at *any* depth, not just repo root — so
@@ -156,153 +204,196 @@ over between sessions.
 
 ## Completed phases
 
-### Phase 1 — Candidate complex selection (2026-09-16)
+### Phase 1 — Candidate complex selection
 
-`src/data/select_complexes.py`, runnable as
-`.venv/bin/python -m src.data.select_complexes --max-entries N`. First live
-run used `--max-entries 500` (of 10,774 total hits for the full filter —
-the full run has not been done yet). See `PLAN.md` Phase 1 for the
-file-path/module reorganization vs. the original sketch.
+**Pilot run (2026-09-16, `--max-entries 500`):** 1275 candidate chains
+across 473 entries, 160 unique UniProt accessions. Preserved at
+`data/interim/pilot_500/` — full details in git history / earlier revisions
+of this file. Notable finding, carried forward below: two large
+crystallographic fragment-screening campaigns (yeast Prp8–Aar2, bovine
+tubulin) dominated this slice, inflating entry counts relative to true
+biological diversity.
 
-**Attrition (chain-level, from `data/interim/phase1_attrition.csv`):**
+**Full-scale run (2026-09-16, no `--max-entries` cap, same day as the
+pilot):** `src/data/select_complexes.py`, runnable as
+`.venv/bin/python -m src.data.select_complexes`. See `PLAN.md` Phase 1 for
+the GraphQL-batching and deposition-group-collapse mechanisms added for
+this run.
 
-| stage | n_before | n_dropped | n_remaining |
-| --- | --- | --- | --- |
-| initial_protein_chains | 1655 | 0 | 1655 |
-| non_protein_entity_type | 1655 | 0 | 1655 |
-| min_chain_length>=40 | 1655 | 245 | 1410 |
-| uniprot_mapping | 1410 | 132 | 1278 |
-| chimera | 1278 | 3 | 1275 |
+**Wall-clock time: ~100 seconds** (measured, `time` around the full run) —
+far under the 2-hour stop-and-ask threshold, so the run proceeded without
+pausing (the pre-run estimate, based on the empirically measured ~125
+entries/sec GraphQL fetch rate plus search-pagination overhead, was a few
+minutes; the actual run beat that). Two transient connection resets during
+search pagination were retried transparently by the existing Retry adapter
+— no manual intervention, no data loss.
 
-Entry-level: 500/500 entries fetched successfully (0 fetch errors, 0 local
-sanity-check failures — every fetched entry genuinely satisfied
-resolution/release-date cutoffs). Final: **1275 candidate chains across 473
-entries, 160 unique UniProt accessions**.
-
-**Distributions:** resolution mean 1.94 Å (range 1.00-2.50, as expected
-given the cutoff); release years 2018 (196), 2019 (23), 2020 (275), 2021
-(300), 2022 (144), 2026 (337) — lumpy because this 500-entry slice is the
-alphabetically-first `rcsb_id`-sorted subset of hits, not a random/temporal
-sample; a full run will smooth this out. `sifts_agrees` was True for
-1265/1275 chains (99.2%); **all 10 disagreements were SIFTS-bulk-file
-coverage gaps** (SIFTS had no mapping at all for that chain, not a
-conflicting accession) — mostly newer TrEMBL-style accessions
-(`A0A...`) not yet in the static bulk snapshot, plus one real antibody
-chain (P01854, IgE heavy constant region, PDB 30AF). This validates using
-RCSB's own `uniprot_ids` (SIFTS-derived, but live-computed) as the
-authoritative source, with the bulk file as a secondary check, as
-implemented.
-
-**Important finding for Phase 2:** UniProt diversity is much lower than
-entry count suggests (160 accessions / 473 entries) because this slice
-contains at least two large **crystallographic fragment-screening
-campaigns** deposited as many near-identical entries of the same complex:
-184 chains (92 entries) of yeast Prp8–Aar2 (PDB `5QY*`, UniProt
-P33334/P32357) and 102 chains (51 entries) of bovine tubulin α/β (PDB
-`5S4*`, UniProt P81947/Q6B856) — together ~30% of all entries in this
-slice. These will cluster hard in Phase 2's 30%-identity redundancy
-reduction (near-100% identity within each campaign), which is the correct
-behavior, but it means **raw entry/chain counts from Phase 1 substantially
-overstate biological diversity** — don't use them as a proxy for Phase 7's
-target sample size without going through Phase 2 first. No antibody-chain
-dominance was found in this slice (only the one incidental IgE hit above).
-
-### Phase 2 — Redundancy reduction + PeSTo-overlap flagging (2026-09-16)
-
-`src/data/cluster_and_split.py`, runnable as
-`.venv/bin/python -m src.data.cluster_and_split`. Run against Phase 1's
-500-entry-slice candidate pool (1275 chains) — **not yet run at full
-scale**, see "Next step" below. See `PLAN.md` Phase 2 for the
-module/output-path reorganization vs. the original sketch.
-
-**Attrition (chain-level, from `data/interim/phase2_attrition.csv`):**
+**Attrition (from `data/interim/phase1_attrition.csv`; first two stages are
+entry-level, the rest are chain-level):**
 
 | stage | n_before | n_dropped | n_remaining |
 | --- | --- | --- | --- |
-| initial_candidate_chains | 1275 | 0 | 1275 |
-| missing_cached_sequence | 1275 | 0 | 1275 |
-| redundancy_clustering | 1275 | 1129 | 146 |
+| entries_from_search | 10,774 | 0 | 10,774 |
+| deposition_group_collapse | 10,774 | 786 | 9,988 |
+| initial_protein_chains | 37,356 | 0 | 37,356 |
+| non_protein_entity_type | 37,356 | 0 | 37,356 |
+| min_chain_length>=40 | 37,356 | 7,551 | 29,805 |
+| uniprot_mapping | 29,805 | 6,673 | 23,132 |
+| chimera | 23,132 | 245 | 22,887 |
 
-All 1275 candidate chains had a cached canonical sequence (Phase 1's
-polymer-entity JSON cache was complete — 0 dropped). MMseqs2 `easy-cluster`
-(`--min-seq-id 0.30 -c 0.80 --cov-mode 0`) collapsed 1275 chains into **146
-clusters**; the largest clusters (204 and 184 members) are exactly the two
-fragment-screening campaigns flagged as a Phase 1 finding above (yeast
-Prp8–Aar2, bovine tubulin), confirming that finding. 135 of 146
-representatives' UniProt accessions are unique (close to the full 146,
-since each cluster is essentially one biological pair).
+786 duplicate entries were dropped across 26 true RCSB deposit groups
+(PanDDA-style campaigns); 9988/9988 remaining entries were fetched
+successfully (0 fetch errors, 0 local sanity-check failures). Final:
+**22,887 candidate chains across 8,808 entries, 4,029 unique UniProt
+accessions** — roughly 18x the pilot's chain count and 25x its UniProt
+diversity, confirming the pilot was a small, non-representative slice.
 
-**PeSTo split sequence resolution:** loaded all 376,216 train / 97,425 test
-/ 101,701 validation chains (line counts match `PLAN.md`'s evidence table);
-union = 575,342 distinct chains, of which 560,829 (97.5%) had a sequence in
-`pdb_seqres.txt.gz` (the other 14,513 are presumably obsolete/superseded
-PDB IDs — logged, excluded from the search target, not silently merged in).
-**Bug found and fixed during this run:** the first pass through
-`load_pesto_split_membership` uppercased the whole `PDBID_CHAINID` string
-before deduplicating, which silently collapsed case-distinct chains (PDB
-chain IDs are case-sensitive — e.g. chain `C` and chain `c` can be
-genuinely different chains in the same entry) — this undercounted the
-union by ~27k entries (548,654 vs. the correct 575,342). Fixed to only
-uppercase the PDB ID half of each line; `tests/test_cluster_and_split.py`
-now has a regression test
-(`test_load_pesto_split_membership_preserves_chain_id_case`). The fix did
-**not** change the leakage-flag results below (same 131/146 and 39/146,
-same sweep table) — the case-collapsed entries happened not to affect any
-representative's best hit — but don't assume that'll always be true; this
-is the kind of bug that stays invisible until the target file is large
-enough for it to matter.
+**Distributions:** resolution mean 2.00 Å (range 0.78-2.50). Release-year
+distribution is now smooth (not lumpy like the alphabetically-sorted
+pilot): 2018 (1907), 2019 (2754), 2020 (3012), 2021 (3078), 2022 (2667),
+2023 (2736), 2024 (2440), 2025 (2599), 2026 (1694, partial year).
+`sifts_agrees` True for 22,648/22,887 chains (99.0%), consistent with the
+pilot's finding that disagreements are bulk-file coverage gaps, not real
+conflicts.
 
-**Leakage search result — the important finding:** of the 146
-representatives, **131 (89.7%) are flagged `pesto_homolog_overlap`** (≥30%
-identity to the train+test+validation union) and 39 (26.7%) are flagged
+### Phase 2 — Redundancy reduction + PeSTo-overlap flagging
+
+**Pilot run (2026-09-16, on the 1275-chain pilot slice):** 146 clusters;
+primary-mode (30% identity, train+test+validation union) leakage sweep
+survivor count was 15 — well under `MIN_TEST_CHAINS_FLOOR` (50). Preserved
+at `data/interim/pilot_500/`. This shortfall motivated the full-scale
+Phase 1 rerun below rather than accepting the pilot's numbers as final.
+
+**Full-scale run (2026-09-16, same day, `src/data/cluster_and_split.py`
+run *unchanged* on the new 22,887-chain candidate pool):**
+
+**Attrition (from `data/interim/phase2_attrition.csv`):**
+
+| stage | n_before | n_dropped | n_remaining |
+| --- | --- | --- | --- |
+| initial_candidate_chains | 22,887 | 0 | 22,887 |
+| missing_cached_sequence | 22,887 | 0 | 22,887 |
+| redundancy_clustering | 22,887 | 19,878 | 3,009 |
+
+MMseqs2 `easy-cluster` (`--min-seq-id 0.30 -c 0.80 --cov-mode 0`) collapsed
+22,887 chains into **3,009 clusters**. Cluster-size distribution is heavily
+right-skewed: top 10 cluster sizes are 786, 702, 627, 428, 411, 306, 270,
+268, 208, 207 (these ten alone account for ~4,213 of the 22,887 candidate
+chains); 762/3,009 clusters (25%) are singletons; 413 clusters have ≥10
+members. This is the expected shape given how much redundancy Phase 1
+already removed via deposition-group collapse — the remaining large
+clusters are independent redeposits/homologs that aren't the same RCSB
+deposit group.
+
+**Leakage search result:** of the 3,009 representatives, **2,313 (76.9%)
+are flagged `pesto_homolog_overlap`** (≥30% identity to the
+train+test+validation union) and 834 (27.7%) are flagged
 `pesto_exact_train_overlap` (literal ID match to the training file alone).
-The gap between those two numbers is exactly what motivated using
-sequence-level rather than exact-ID leakage control in the first place —
-most of the true overlap would have been invisible to ID matching alone.
 
 **Leakage threshold sweep (`data/interim/leakage_threshold_sweep.csv`),
 against `MIN_TEST_CHAINS_TARGET=100` / `MIN_TEST_CHAINS_FLOOR=50`:**
 
 | mode | n_survive | meets target (100) | meets floor (50) |
 | --- | --- | --- | --- |
-| identity < 0.30 (primary) | 15 | No | No |
-| identity < 0.50 | 25 | No | No |
-| identity < 0.70 | 27 | No | No |
-| identity < 0.95 | 30 | No | No |
-| exact-ID (train only) | 107 | Yes | Yes |
+| identity < 0.30 (primary) | 696 | Yes | Yes |
+| identity < 0.50 | 834 | Yes | Yes |
+| identity < 0.70 | 945 | Yes | Yes |
+| identity < 0.95 | 1,039 | Yes | Yes |
+| exact-ID (train only) | 2,175 | Yes | Yes |
 
-**Implication, per `PLAN.md` confound (e):** on this candidate pool, the
-primary (`"homolog"`) mode is well under even the 50-chain hard floor, and
-stays under it all the way out to 95% identity — this is not a borderline
-case fixable by loosening the cutoff slightly. Per the pre-agreed
-mitigation, the leakage filter should **not** be loosened to hit the
-target; Phase 7 should stratify by `pesto_homolog_overlap` status and lean
-on the `"exact_train"`/`"none"` sensitivity modes, which do clear the
-target. However, the more likely explanation is simply that **this
-candidate pool is a small, non-random 500-entry test slice** (see Phase 1's
-fragment-screening-campaign finding) — a full-scale Phase 1 run should
-produce enough non-redundant, non-overlapping clusters to reassess this
-before concluding the primary analysis is structurally underpowered.
+**Every mode, including the strictest (primary, 30% identity against the
+full union), now clears both the target and the floor by a wide margin.**
+The pilot's shortfall is fully resolved by the full-scale candidate pool —
+it was a small-sample artifact, not evidence that the primary leakage
+definition is unworkable.
+
+**Extra breakdown (a) — train-only vs. the recorded train+test+validation
+union, at each swept threshold** (`data/interim/leakage_threshold_sweep_by_source.csv`;
+this does not change the recorded primary definition, which stays the
+union):
+
+| identity threshold | union (train+test+val, primary) | train-only |
+| --- | --- | --- |
+| < 0.30 | 696 | 1,105 |
+| < 0.50 | 834 | 1,336 |
+| < 0.70 | 945 | 1,451 |
+| < 0.95 | 1,039 | 1,542 |
+
+Including test+validation in the exclusion set (the recorded decision, per
+`PLAN.md` confound (b) — both files' true roles couldn't be confidently
+distinguished, see the evidence table) costs roughly 35-40% of the
+survivors relative to train-only at every threshold (e.g. at 30%: 696 vs.
+1105, a 409-chain/37% reduction). Both are comfortably above the floor
+either way at full scale.
+
+**Extra breakdown (b) — survivors by release year, primary (union, 30%)
+definition** (`data/interim/leakage_by_release_year.csv`):
+
+| release year | n representatives | n survive (union, primary) | % flagged (union) | n survive (train-only) | % flagged (train-only) |
+| --- | --- | --- | --- | --- | --- |
+| 2018 | 320 | 0 | 100.0% | 55 | 82.8% |
+| 2019 | 416 | 1 | 99.8% | 67 | 83.9% |
+| 2020 | 385 | 3 | 99.2% | 79 | 79.5% |
+| 2021 | 328 | 96 | 70.7% | 134 | 59.1% |
+| 2022 | 341 | 128 | 62.5% | 158 | 53.7% |
+| 2023 | 335 | 127 | 62.1% | 166 | 50.4% |
+| 2024 | 333 | 130 | 61.0% | 171 | 48.6% |
+| 2025 | 331 | 122 | 63.1% | 161 | 51.4% |
+| 2026 | 220 | 89 | 59.5% | 114 | 48.2% |
+
+**This is the most surprising and most decision-relevant finding of this
+session.** Chains released 2018-2020 (i.e. right after the AF2 training
+cutoff) are almost entirely (99-100%) flagged as PeSTo-overlapping under
+the primary definition — essentially none of them would survive the
+primary leakage filter. The flag rate drops sharply and plateaus around
+59-63% (union) / 48-59% (train-only) from 2021 onward. This is consistent
+with PeSTo's own training-data snapshot extending to roughly 2020-2021
+(PeSTo was published in 2023, so a ~2020-2021 cutoff is plausible), well
+past the 2018-04-30 AF2 cutoff this project uses for its own candidate
+pool — see `PLAN.md` §5 open question #2, now partially answered by this
+evidence. **Practical implication:** almost all of the primary mode's 696
+survivors are necessarily drawn from 2021+ releases; there are essentially
+zero usable non-overlapping chains from the 2018-2020 window under the
+strict/primary definition. If the eventual benchmark specifically wants
+coverage close to the AF2 cutoff boundary, the primary leakage definition
+as recorded will not provide it — that tension is inherent to the data
+and not resolved by picking a different identity threshold within the
+30-95% sweep range.
+
+**Tradeoffs for the (still open) leakage-threshold decision:**
+
+- Loosening the identity threshold from 30% to 95% only grows the primary
+  survivor pool from 696 to 1,039 (a ~49% relative increase) — a modest
+  gain for a large weakening of what "no leakage" actually means, since
+  50-95%-identity homologs can still share fold/interface-pattern
+  information with PeSTo's training data.
+- Dropping test+validation from the exclusion set (train-only) grows the
+  pool further (e.g. 696 → 1,105 at 30%) but reintroduces exactly the
+  ambiguity `PLAN.md` confound (b) chose to resolve conservatively (which
+  file was the true untouched holdout is unresolved from paper vs. code).
+- All four swept thresholds and both source scopes (union/train-only)
+  clear `MIN_TEST_CHAINS_TARGET` on their own now — sample size is no
+  longer the constraint it was against the pilot slice. The remaining
+  choice is a leakage-strictness/coverage tradeoff, and specifically a
+  *temporal* coverage tradeoff (recent vs. right-after-cutoff releases),
+  not a raw-sample-size one.
 
 ## Next step
 
-**Rerun Phase 1 at full scale first**, then rerun Phase 2 on the result.
-`select_complexes` reported 10,774 total hits for the full filter when last
-run with `--max-entries 500`; rerunning with a much larger `--max-entries`
-(or none) will take longer (more RCSB API calls, all cached/resumable) but
-is needed before the Phase 2 leakage-sweep numbers above can be trusted as
-representative — the current 15-chain primary-mode survivor count is
-plausibly an artifact of the small, campaign-heavy 500-entry slice rather
-than a true property of the full candidate pool. Re-run
-`.venv/bin/python -m src.data.cluster_and_split` afterward (it will
-re-cluster from scratch since `data/interim/candidates.csv` will have
-changed; the PeSTo-splits/`pdb_seqres.txt.gz` caches are reusable as-is).
+**A human threshold decision is pending** — this session deliberately did
+not choose one (see the tradeoffs above and the full sweep/breakdown CSVs
+in `data/interim/`). Once decided, the choice should be recorded as the
+final piece of `PLAN.md` Phase 7's leakage-sensitivity design (it's already
+using `LEAKAGE_FILTER_MODES`/`SEQUENCE_IDENTITY_CUTOFF` from `src/config.py`
+— no code changes needed regardless of which threshold is chosen, since
+Phase 7 already re-derives eligibility from `candidates_dedup.csv`'s
+per-representative identity columns rather than hardcoding 30%).
 
-Once a representative-scale Phase 2 result exists, proceed to **Phase 3 —
-Download PDB mmCIFs and AlphaFold DB models** (`PLAN.md` Phase 3):
-`src/data/download_pdb.py`, `src/data/download_alphafold.py`,
-`src/pipeline/download_structures.py`, reading from
-`data/interim/candidates_dedup.csv`.
+**Do not start Phase 3** until that decision is made (explicit instruction
+this session). Once ready, Phase 3 is **Download PDB mmCIFs and AlphaFold
+DB models** (`PLAN.md` Phase 3): `src/data/download_pdb.py`,
+`src/data/download_alphafold.py`, `src/pipeline/download_structures.py`,
+reading from `data/interim/candidates_dedup.csv`.
 
 Open question #3 from `PLAN.md` §5 (the Phase 9 significance threshold)
 is still unresolved and still cheap to decide now.

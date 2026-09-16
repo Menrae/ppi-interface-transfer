@@ -1,0 +1,34 @@
+{
+  "data": {
+    "entries": [
+      {
+        "rcsb_id": "1ABC",
+        "rcsb_accession_info": {
+          "initial_release_date": "2019-06-12T00:00:00Z"
+        },
+        "rcsb_entry_info": {
+          "resolution_combined": [1.95],
+          "polymer_entity_count_protein": 2,
+          "polymer_entity_count_nucleic_acid": 0
+        },
+        "rcsb_entry_container_identifiers": {
+          "polymer_entity_ids": ["1"]
+        },
+        "polymer_entities": [
+          {
+            "entity_poly": {
+              "rcsb_entity_polymer_type": "Protein",
+              "rcsb_sample_sequence_length": 141,
+              "pdbx_seq_one_letter_code_can": "VLSPADKTNVKAAWGKVGAHAGEYGAEALERMFLSFPTTKTYFPHF"
+            },
+            "rcsb_polymer_entity_container_identifiers": {
+              "auth_asym_ids": ["A", "C"],
+              "uniprot_ids": ["P69905"],
+              "entity_id": "1"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

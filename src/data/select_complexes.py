@@ -35,6 +35,7 @@ ENTRY_URL_TEMPLATE = "https://data.rcsb.org/rest/v1/core/entry/{entry_id}"
 POLYMER_ENTITY_URL_TEMPLATE = (
     "https://data.rcsb.org/rest/v1/core/polymer_entity/{entry_id}/{entity_id}"
 )
+GRAPHQL_URL = "https://data.rcsb.org/graphql"
 SIFTS_URL = (
     "https://ftp.ebi.ac.uk/pub/databases/msd/sifts/flatfiles/tsv/"
     "pdb_chain_uniprot.tsv.gz"
@@ -44,6 +45,8 @@ RCSB_RAW_DIR = config.RAW_DATA_DIR / "rcsb"
 SEARCH_CACHE_DIR = RCSB_RAW_DIR / "search"
 ENTRY_CACHE_DIR = RCSB_RAW_DIR / "entries"
 POLYMER_ENTITY_CACHE_DIR = RCSB_RAW_DIR / "polymer_entities"
+GRAPHQL_GROUP_BATCH_CACHE_DIR = RCSB_RAW_DIR / "graphql_group_batches"
+GRAPHQL_ENTRY_BATCH_CACHE_DIR = RCSB_RAW_DIR / "graphql_entry_batches"
 
 SIFTS_DIR = config.RAW_DATA_DIR / "sifts"
 SIFTS_CACHE_PATH = SIFTS_DIR / "pdb_chain_uniprot.tsv.gz"
@@ -53,6 +56,64 @@ ATTRITION_PATH = config.INTERIM_DATA_DIR / "phase1_attrition.csv"
 
 SEARCH_PAGE_SIZE = 100
 REQUEST_DELAY_SECONDS = 0.1
+
+# Batch size for RCSB GraphQL requests (data.rcsb.org/graphql), which can
+# return an entry plus all of its polymer entities in a single call. This
+# replaces the old 1-entry-then-1-call-per-entity REST loop for the bulk of
+# entries; empirically ~500 ids with the full field set below takes ~4s, so
+# a full ~10-11k entry run costs on the order of a couple of minutes of
+# network time instead of tens of thousands of sequential REST calls.
+GRAPHQL_BATCH_SIZE = 200
+
+# Lightweight query used only to decide deposition-group membership before
+# doing the expensive full-entity fetch (see collapse_deposition_groups).
+GRAPHQL_GROUP_QUERY = """
+query($ids: [String!]!) {
+  entries(entry_ids: $ids) {
+    rcsb_id
+    rcsb_entry_info { resolution_combined }
+    rcsb_entry_group_membership { group_id aggregation_method }
+  }
+}
+"""
+
+# Full entry + nested polymer-entity query, field-for-field equivalent to
+# the REST entry/polymer_entity responses fetch_entry/fetch_polymer_entity
+# parse, so split_graphql_entry's output can be written to the exact same
+# per-entry/per-entity cache files those REST fetchers use.
+GRAPHQL_ENTRY_QUERY = """
+query($ids: [String!]!) {
+  entries(entry_ids: $ids) {
+    rcsb_id
+    rcsb_accession_info { initial_release_date }
+    rcsb_entry_info {
+      resolution_combined
+      polymer_entity_count_protein
+      polymer_entity_count_nucleic_acid
+    }
+    rcsb_entry_container_identifiers { polymer_entity_ids }
+    polymer_entities {
+      entity_poly {
+        rcsb_entity_polymer_type
+        rcsb_sample_sequence_length
+        pdbx_seq_one_letter_code_can
+      }
+      rcsb_polymer_entity_container_identifiers {
+        auth_asym_ids
+        uniprot_ids
+        entity_id
+      }
+    }
+  }
+}
+"""
+
+# Only this aggregation method identifies a true group *deposition* (e.g. a
+# PanDDA fragment-screening campaign depositing many near-identical
+# structures together) -- RCSB's other group types (e.g. sequence-identity
+# browsing clusters) are a different, unrelated concept and must not be
+# used for this collapse.
+DEPOSIT_GROUP_AGGREGATION_METHOD = "matching_deposit_group_id"
 
 CANDIDATE_FIELDS = [
     "pdb_id",
@@ -280,6 +341,189 @@ def fetch_polymer_entity(
         cache_path,
         POLYMER_ENTITY_URL_TEMPLATE.format(entry_id=entry_id, entity_id=entity_id),
     )
+
+
+def _graphql_batches(ids: list[str], batch_size: int = GRAPHQL_BATCH_SIZE) -> list[list[str]]:
+    return [ids[i : i + batch_size] for i in range(0, len(ids), batch_size)]
+
+
+def fetch_group_membership_batched(
+    session: requests.Session, entry_ids: list[str]
+) -> dict[str, dict]:
+    """Return {entry_id: {"group_id": str|None, "resolution": float|None}}.
+
+    Uses the lightweight GRAPHQL_GROUP_QUERY (no polymer entities) so this
+    pre-pass is cheap even for the full ~11k-entry search. Only
+    DEPOSIT_GROUP_AGGREGATION_METHOD memberships count as a "deposition
+    group" for collapse_deposition_groups.
+    """
+    info: dict[str, dict] = {}
+    batches = _graphql_batches(entry_ids)
+    logger.info(
+        "Fetching deposition-group membership for %d entries in %d GraphQL batches",
+        len(entry_ids),
+        len(batches),
+    )
+    for i, batch in enumerate(batches):
+        batch_hash = hashlib.sha256(",".join(batch).encode("utf-8")).hexdigest()[:16]
+        cache_path = GRAPHQL_GROUP_BATCH_CACHE_DIR / f"batch_{batch_hash}.json"
+        data = _cached_request(
+            session,
+            cache_path,
+            GRAPHQL_URL,
+            method="POST",
+            json_body={"query": GRAPHQL_GROUP_QUERY, "variables": {"ids": batch}},
+        )
+        if data.get("errors"):
+            logger.warning("GraphQL group-membership batch %d had errors: %s", i, data["errors"])
+        for entry in (data.get("data") or {}).get("entries") or []:
+            if entry is None:
+                continue
+            entry_id = entry["rcsb_id"]
+            resolution_list = (entry.get("rcsb_entry_info") or {}).get("resolution_combined") or []
+            group_id = None
+            for membership in entry.get("rcsb_entry_group_membership") or []:
+                if membership.get("aggregation_method") == DEPOSIT_GROUP_AGGREGATION_METHOD:
+                    group_id = membership["group_id"]
+                    break
+            info[entry_id] = {
+                "resolution": resolution_list[0] if resolution_list else None,
+                "group_id": group_id,
+            }
+    logger.info("Resolved group membership for %d/%d entries", len(info), len(entry_ids))
+    return info
+
+
+def collapse_deposition_groups(group_info: dict[str, dict]) -> tuple[list[str], list[dict]]:
+    """Keep one entry per true deposition group (best resolution, then ID).
+
+    Entries with no group_id are singletons and always kept. Pure function
+    (no I/O) so it's directly unit-testable; returns (kept_entry_ids,
+    dropped_records) where each dropped record explains which entry was
+    kept in its place.
+    """
+    groups: dict[str, list[str]] = {}
+    for entry_id, info in group_info.items():
+        key = info["group_id"] if info["group_id"] is not None else f"__singleton__{entry_id}"
+        groups.setdefault(key, []).append(entry_id)
+
+    def sort_key(entry_id: str) -> tuple[float, str]:
+        resolution = group_info[entry_id]["resolution"]
+        # Missing resolution sorts last within its group rather than
+        # crashing/being silently preferred.
+        return (resolution if resolution is not None else float("inf"), entry_id)
+
+    kept: list[str] = []
+    dropped: list[dict] = []
+    for key, members in groups.items():
+        members_sorted = sorted(members, key=sort_key)
+        keep_id = members_sorted[0]
+        kept.append(keep_id)
+        for entry_id in members_sorted[1:]:
+            dropped.append(
+                {
+                    "pdb_id": entry_id,
+                    "group_id": group_info[entry_id]["group_id"],
+                    "kept_representative": keep_id,
+                    "resolution": group_info[entry_id]["resolution"],
+                    "drop_reason": f"deposition_group_duplicate:{group_info[entry_id]['group_id']} kept={keep_id}",
+                }
+            )
+    kept.sort()
+    return kept, dropped
+
+
+def split_graphql_entry(entry: dict) -> tuple[dict, dict[str, dict]]:
+    """Split one GraphQL entries[] element into (entry_json, {entity_id: entity_json}).
+
+    Shaped identically to what fetch_entry/fetch_polymer_entity cache from
+    the single-item REST endpoints, so parse_entry_summary/
+    parse_polymer_entity work unchanged regardless of which fetch path
+    populated the cache.
+    """
+    entry_json = {k: v for k, v in entry.items() if k not in ("rcsb_id", "polymer_entities")}
+    entities: dict[str, dict] = {}
+    for pe in entry.get("polymer_entities") or []:
+        entity_id = pe["rcsb_polymer_entity_container_identifiers"]["entity_id"]
+        entities[entity_id] = pe
+    return entry_json, entities
+
+
+def _write_json_cache(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f)
+
+
+def warm_entry_cache_via_graphql(session: requests.Session, entry_ids: list[str]) -> None:
+    """Ensure entries/{id}.json and polymer_entities/{id}_{eid}.json exist on
+    disk for every id in entry_ids, fetching missing ones in GraphQL batches.
+
+    Resumable at per-entry granularity: an id already cached (entries/{id}.json
+    exists) is never re-requested, regardless of GraphQL batch boundaries, so
+    an interrupted run picks up exactly where it left off on rerun. Any id
+    GraphQL doesn't return data for (rare -- e.g. a very recently
+    suspended/obsoleted entry) falls back to the original single-item REST
+    fetchers rather than being silently skipped.
+    """
+    missing = [eid for eid in entry_ids if not (ENTRY_CACHE_DIR / f"{eid}.json").exists()]
+    if not missing:
+        logger.info("All %d entries already cached; no GraphQL fetch needed", len(entry_ids))
+        return
+
+    batches = _graphql_batches(missing)
+    logger.info(
+        "Fetching %d/%d entries (+ nested polymer entities) via %d GraphQL batches of up to %d",
+        len(missing),
+        len(entry_ids),
+        len(batches),
+        GRAPHQL_BATCH_SIZE,
+    )
+    still_missing: set[str] = set(missing)
+    for i, batch in enumerate(batches):
+        batch_hash = hashlib.sha256(",".join(batch).encode("utf-8")).hexdigest()[:16]
+        cache_path = GRAPHQL_ENTRY_BATCH_CACHE_DIR / f"batch_{batch_hash}.json"
+        data = _cached_request(
+            session,
+            cache_path,
+            GRAPHQL_URL,
+            method="POST",
+            json_body={"query": GRAPHQL_ENTRY_QUERY, "variables": {"ids": batch}},
+        )
+        if data.get("errors"):
+            logger.warning("GraphQL entry batch %d had errors: %s", i, data["errors"])
+        for entry in (data.get("data") or {}).get("entries") or []:
+            if entry is None:
+                continue
+            entry_id = entry["rcsb_id"]
+            entry_json, entities = split_graphql_entry(entry)
+            _write_json_cache(ENTRY_CACHE_DIR / f"{entry_id}.json", entry_json)
+            for entity_id, entity_json in entities.items():
+                _write_json_cache(POLYMER_ENTITY_CACHE_DIR / f"{entry_id}_{entity_id}.json", entity_json)
+            still_missing.discard(entry_id)
+        logger.info("GraphQL entry batch %d/%d done (%d ids not yet resolved)", i + 1, len(batches), len(still_missing))
+
+    if still_missing:
+        logger.warning(
+            "%d entries not returned by GraphQL batches; falling back to single-item REST fetch: %s",
+            len(still_missing),
+            sorted(still_missing)[:20],
+        )
+        for entry_id in sorted(still_missing):
+            try:
+                entry_data = fetch_entry(session, entry_id)
+            except requests.RequestException as exc:
+                logger.warning("REST fallback failed to fetch entry %s: %s", entry_id, exc)
+                continue
+            for entity_id in (entry_data.get("rcsb_entry_container_identifiers") or {}).get(
+                "polymer_entity_ids", []
+            ) or []:
+                try:
+                    fetch_polymer_entity(session, entry_id, entity_id)
+                except requests.RequestException as exc:
+                    logger.warning(
+                        "REST fallback failed to fetch polymer entity %s/%s: %s", entry_id, entity_id, exc
+                    )
 
 
 def parse_entry_summary(entry_id: str, entry_data: dict) -> dict:
@@ -561,6 +805,52 @@ def run(max_entries: int | None = None, max_protein_entities: int | None = None)
         if max_protein_entities is not None:
             config.MAX_PROTEIN_ENTITIES = original
 
+    # Deposition-group collapse: PanDDA-style fragment-screening campaigns can
+    # deposit hundreds of near-identical entries (same protein complex, only
+    # the soaked fragment differs) under one RCSB "deposit group". Collapsing
+    # to one (best-resolution) entry per group here, before the expensive
+    # per-entry metadata fetch, cuts fetch volume and keeps entry-level
+    # counts from misrepresenting biological diversity. This is an entry-
+    # level attrition stage, logged with different units than the
+    # chain-level stages that follow -- see PLAN.md Phase 1.
+    group_info = fetch_group_membership_batched(session, entry_ids)
+    kept_entry_ids, group_dropped = collapse_deposition_groups(group_info)
+    for d in group_dropped:
+        logger.debug(
+            "dropped entry %s (deposition group %s): %s",
+            d["pdb_id"],
+            d["group_id"],
+            d["drop_reason"],
+        )
+    entry_level_attrition = [
+        {
+            "stage": "entries_from_search",
+            "n_before": len(entry_ids),
+            "n_dropped": 0,
+            "n_remaining": len(entry_ids),
+            "note": "entry-level count (not chains)",
+        },
+        {
+            "stage": "deposition_group_collapse",
+            "n_before": len(entry_ids),
+            "n_dropped": len(group_dropped),
+            "n_remaining": len(kept_entry_ids),
+            "note": "entry-level count (not chains); one best-resolution entry kept per "
+            f"{DEPOSIT_GROUP_AGGREGATION_METHOD} group, rest logged at DEBUG",
+        },
+    ]
+    logger.info(
+        "Deposition-group collapse: %d entries -> %d kept (%d duplicates dropped across "
+        "%d groups)",
+        len(entry_ids),
+        len(kept_entry_ids),
+        len(group_dropped),
+        len({d["group_id"] for d in group_dropped}),
+    )
+    entry_ids = kept_entry_ids
+
+    warm_entry_cache_via_graphql(session, entry_ids)
+
     sifts_path = download_sifts_mapping(session)
     logger.info("Loading SIFTS mapping from %s", sifts_path)
     sifts_mapping = load_sifts_mapping(sifts_path)
@@ -645,7 +935,8 @@ def run(max_entries: int | None = None, max_protein_entities: int | None = None)
         len(chain_rows),
     )
 
-    surviving_rows, attrition = run_filter_pipeline(chain_rows, config.MIN_CHAIN_LENGTH)
+    surviving_rows, chain_attrition = run_filter_pipeline(chain_rows, config.MIN_CHAIN_LENGTH)
+    attrition = entry_level_attrition + chain_attrition
 
     # Finalize output rows (flatten list fields to ';'-joined strings for CSV).
     output_rows = []

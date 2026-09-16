@@ -141,16 +141,20 @@ summary of *why* each phase is designed the way it is.
 *Last updated: 2026-09-16. See [`PROGRESS.md`](PROGRESS.md) for the
 detailed, actively-maintained log this section is drawn from.*
 
-- ✅ **Phase 1 — Candidate selection**: done. An initial run against a subset
-  of the PDB (500 entries) produced 1275 candidate protein chains across 473
-  entries.
-- ✅ **Phase 2 — Redundancy reduction + leakage flagging**: done. On that
-  same 500-entry slice, redundancy clustering collapsed the 1275 candidate
-  chains down to 146 non-redundant representatives; the PeSTo leakage check
-  found that most of those representatives are sequence-similar to
-  something in PeSTo's own training/evaluation data. A full-scale run
-  against the entire PDB (not just the 500-entry test slice) is the planned
-  next step before drawing conclusions from these counts.
+- ✅ **Phase 1 — Candidate selection**: done, run at full scale against the
+  entire filtered search (no subset cap): 22,887 candidate protein chains
+  across 8,808 PDB entries, spanning 4,029 unique UniProt accessions. (An
+  earlier 500-entry pilot run is kept on disk for comparison but is no
+  longer the active dataset.)
+- ✅ **Phase 2 — Redundancy reduction + leakage flagging**: done, also run
+  at full scale. Sequence clustering collapsed the 22,887 candidate chains
+  down to 3,009 non-redundant representatives. Checking those
+  representatives against PeSTo's own published training data found that
+  roughly three-quarters are sequence-similar enough to count as
+  "overlapping" under the project's leakage definition — but enough
+  non-overlapping representatives remain (in the hundreds) to support the
+  benchmark. Exactly how strict to make that leakage cutoff is still an
+  open decision, informed by this run's results but not yet made.
 - ⬜ Phases 3–10 — not yet started.
 
 ## 6. Repository layout

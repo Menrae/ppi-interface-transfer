@@ -20,18 +20,22 @@ no GPU) recovers some of the lost accuracy.
 
 ## 2. Phases
 
-### Phase 1 — Candidate complex selection — **DONE** (2026-09-16)
+### Phase 1 — Candidate complex selection — **DONE** (2026-09-16, full-scale rerun same day)
 
 Implemented as a single module rather than the three sketched below —
 `src/data/select_complexes.py` covers search, entry/entity fetch, SIFTS
 cross-check, and filtering together, since none of the pieces were reused
 elsewhere. Output paths and cache layout also ended up simpler than
 originally sketched; both are corrected below to match what actually
-exists on disk.
+exists on disk. First run used `--max-entries 500` as a pilot/smoke test
+(preserved at `data/interim/pilot_500/`, not overwritten); the full,
+uncapped run (all 10,774 search hits) is now the authoritative
+`data/interim/candidates.csv`.
 
-- **Inputs:** RCSB Search API v2 (REST, live query); RCSB Data API (REST,
-  per-entry and per-polymer-entity); SIFTS PDB↔UniProt bulk file
-  (`pdb_chain_uniprot.tsv.gz` from the EBI SIFTS FTP site).
+- **Inputs:** RCSB Search API v2 (REST, live query, paginated); RCSB
+  GraphQL API (`data.rcsb.org/graphql`, batched entry+polymer-entity fetch
+  — see below) with a REST single-item fallback; SIFTS PDB↔UniProt bulk
+  file (`pdb_chain_uniprot.tsv.gz` from the EBI SIFTS FTP site).
 - **Config used:** `RESOLUTION_CUTOFF_ANGSTROM` (2.5), `PDB_RELEASE_DATE_CUTOFF`
   (2018-04-30) — see confound (a); candidates are filtered to
   `initial_release_date > PDB_RELEASE_DATE_CUTOFF` (RCSB
@@ -39,36 +43,89 @@ exists on disk.
   training cutoff is a release-date cutoff) to reduce AF2 memorization risk;
   `MAX_PROTEIN_ENTITIES` (10) bounds entry complexity; `MIN_CHAIN_LENGTH`
   (40) drops peptide fragments (both added to `src/config.py` this phase).
+- **Batched metadata fetch (added for the full-scale rerun):** entry +
+  nested polymer-entity metadata is fetched via the RCSB GraphQL API in
+  batches of `GRAPHQL_BATCH_SIZE` (200) IDs per request instead of one REST
+  call per entry plus one per entity — empirically ~125 entries/sec, vs.
+  tens of thousands of sequential REST calls under the old approach. The
+  GraphQL response is split (`split_graphql_entry`) into the exact same
+  per-entry/per-entity JSON shape the old REST fetchers cached, so
+  `parse_entry_summary`/`parse_polymer_entity` and every downstream
+  consumer (including Phase 2) are unchanged. Any ID GraphQL doesn't return
+  (rare) falls back to the original single-item REST fetch rather than
+  being silently dropped.
+- **Resumability:** every entry/entity is still cached one-file-per-item
+  (`entries/{id}.json`, `polymer_entities/{id}_{entity_id}.json}`) — an
+  already-cached ID is never re-requested regardless of GraphQL batch
+  boundaries, so an interrupted run resumes exactly where it left off, and
+  a full rerun after any partial completion is cheap (cache hits only).
+  Verified live: two transient connection resets during the full-scale
+  search-pagination pass were retried transparently by `build_session()`'s
+  Retry adapter with no data loss.
+- **Deposition-group collapse (new attrition stage, entry-level):**
+  PanDDA-style fragment-screening campaigns deposit many near-identical
+  entries (same complex, different soaked fragment) under one RCSB
+  "deposit group" — a real, documented field
+  (`rcsb_entry_group_membership`/`pdbx_deposit_group`, filtered to
+  `aggregation_method == "matching_deposit_group_id"` specifically, not
+  RCSB's unrelated sequence-similarity browsing groups). Before the
+  expensive per-entry fetch, one best-resolution entry is kept per group
+  (`collapse_deposition_groups`, deterministic: lowest resolution, then
+  ascending PDB ID); this both cuts fetch volume and keeps entry-level
+  counts from misrepresenting biological diversity. Implemented as its own
+  logged attrition stage (`deposition_group_collapse`, entry-level units)
+  rather than left to Phase 2 clustering alone, once this authoritative
+  RCSB field was found — Phase 2's chain-level MMseqs2 clustering still
+  independently collapses any remaining near-duplicate sequences (e.g.
+  campaigns not tagged with this field, or true independent redeposits of
+  the same protein pair), so the two mechanisms are complementary, not
+  redundant.
 - **Outputs (actual):**
   - `data/raw/rcsb/search/<query_hash>/page_start<N>.json` (cached search
     pages, one per 100-row page)
+  - `data/raw/rcsb/graphql_group_batches/`, `data/raw/rcsb/graphql_entry_batches/`
+    (cached raw GraphQL batch responses)
   - `data/raw/rcsb/entries/{pdb_id}.json`, `data/raw/rcsb/polymer_entities/{pdb_id}_{entity_id}.json`
-    (cached Data API responses, one file per entry/entity)
+    (cached per-entry/per-entity metadata, written by either the GraphQL or
+    REST-fallback path — same shape either way)
   - `data/raw/sifts/pdb_chain_uniprot.tsv.gz` (cached bulk file)
   - `data/interim/candidates.csv` — one row per surviving protein chain:
     `pdb_id`, `release_date`, `resolution`, `n_protein_entities`,
     `entity_id`, `chain_id`, `seq_length`, `polymer_type`, `uniprot_ids`
     (`;`-joined), `n_uniprot_ids`, `sifts_uniprot_ids`, `sifts_agrees`
-  - `data/interim/phase1_attrition.csv` — chain-level filter attrition
-    (`stage`, `n_before`, `n_dropped`, `n_remaining`, `note`)
+  - `data/interim/phase1_attrition.csv` — entry-level stages
+    (`entries_from_search`, `deposition_group_collapse`) followed by
+    chain-level filter stages (`stage`, `n_before`, `n_dropped`,
+    `n_remaining`, `note`; the `note` column says which unit a stage uses)
+  - `data/interim/pilot_500/` — the preserved 500-entry pilot run's
+    `candidates.csv`/`phase1_attrition.csv` (and its Phase 2 outputs), kept
+    for before/after comparison, not part of the active pipeline
   - `logs/select_complexes.log` — full DEBUG-level log incl. every dropped
-    chain's reason and every SIFTS disagreement
+    chain's reason, every SIFTS disagreement, and every deposition-group
+    duplicate drop
 - **src modules:** `src/data/select_complexes.py` (search query builder,
-  paginated search, entry/entity fetch+parse, SIFTS load+cross-check, chain
-  filters, CLI).
-- **Tests:** `tests/test_select_complexes.py` (11 tests, all passing,
+  paginated search, GraphQL batched fetch + REST fallback, deposition-group
+  collapse, SIFTS load+cross-check, chain filters, CLI).
+- **Tests:** `tests/test_select_complexes.py` (21 tests, all passing,
   no network) — query builder reads config not literals; entry/entity
   parsing on fixture JSON in `tests/fixtures/`; SIFTS mapping load +
   agreement/disagreement cross-check; each chain filter individually
   (including a chimera case and a short-chain case) plus the combined
-  pipeline's attrition bookkeeping.
-- **Success criterion:** met on the first live run (`--max-entries 500`,
-  2026-09-16): 500/500 entries fetched (0 fetch errors, 0 local
-  sanity-check failures — i.e. 100% of fetched entries satisfied the
-  resolution/release-date cutoffs), 1275 candidate chains across 473
-  entries, 160 unique UniProt accessions written to `data/interim/candidates.csv`.
-  Comfortably over the ~200-complex flag threshold. Full attrition and
-  distribution numbers are in `PROGRESS.md`.
+  pipeline's attrition bookkeeping; deposition-group collapse (best
+  resolution, ID tiebreak, missing-resolution handling, singleton
+  passthrough); GraphQL batch response splitting matches the REST fixture
+  shape end-to-end through the real parsers; group-membership batch
+  parsing filters out non-deposit aggregation methods; cache-warming
+  resumability (a fully-cached ID triggers zero network calls, asserted via
+  a fake session that raises on any unexpected call) and REST fallback for
+  IDs GraphQL omits.
+- **Success criterion:** met on both runs. Pilot (`--max-entries 500`,
+  2026-09-16): 500/500 entries fetched, 1275 candidate chains, 160 unique
+  UniProt accessions (preserved at `data/interim/pilot_500/`). Full run (no
+  cap, same day): 9988/9988 post-collapse entries fetched (0 fetch errors,
+  0 local sanity-check failures), 22887 candidate chains across 8808
+  entries, 4029 unique UniProt accessions, total wall-clock ~100 seconds.
+  Full attrition and distribution numbers are in `PROGRESS.md`.
 
 ### Phase 2 — Redundancy reduction + PeSTo-overlap flagging (sequence-level) — **DONE** (2026-09-16)
 
@@ -182,16 +239,23 @@ are themselves `wc -l`-style counts.)*
   `pdb_seqres.txt.gz` lookup on a synthetic gzip fixture; one test that
   invokes the real MMseqs2 binary end-to-end on tiny synthetic sequences,
   marked to skip if the binary is absent.
-- **Success criterion:** met on the first live run (2026-09-16, run against
-  Phase 1's 500-entry-slice candidate pool): every retained representative
-  has non-null `pesto_homolog_overlap`/`pesto_exact_train_overlap`; the
-  MMseqs2 command lines and hit counts are logged
-  (`logs/cluster_and_split.log`); the dropped-duplicate count is logged with
-  reason at the `redundancy_clustering` attrition stage. See PROGRESS.md for
-  the actual cluster count, leakage rates, and threshold-sweep table — the
-  primary (`"homolog"`-mode) survivor count came in well under
-  `MIN_TEST_CHAINS_FLOOR` on this small candidate pool, which is expected to
-  improve once Phase 1 is rerun at full scale (see PROGRESS.md "Next step").
+- **Success criterion:** met on both runs. Every retained representative has
+  non-null `pesto_homolog_overlap`/`pesto_exact_train_overlap`; the MMseqs2
+  command lines and hit counts are logged (`logs/cluster_and_split.log`);
+  the dropped-duplicate count is logged with reason at the
+  `redundancy_clustering` attrition stage. Pilot run (2026-09-16, against
+  Phase 1's 500-entry pilot slice, preserved at `data/interim/pilot_500/`):
+  the primary (`"homolog"`-mode) survivor count (15) came in well under
+  `MIN_TEST_CHAINS_FLOOR` on that small, campaign-heavy candidate pool.
+  Full-scale rerun (same day, unchanged code, run against the full
+  22,887-chain candidate pool from Phase 1's uncapped run): the primary
+  mode now clears both `MIN_TEST_CHAINS_TARGET` and `MIN_TEST_CHAINS_FLOOR`
+  at every swept threshold, confirming the pilot's shortfall was a small-
+  sample artifact rather than a structural problem. See PROGRESS.md for the
+  full cluster count, leakage rates, threshold-sweep table, and the two
+  additional breakdowns (train-only vs. train+test+validation union;
+  survivor rate by release year) produced to inform the (still undecided)
+  leakage-threshold choice — this plan does not pick a threshold.
 
 ### Phase 3 — Download PDB mmCIFs and AlphaFold DB models
 - **Inputs:** `data/processed/nonredundant_complexes.parquet`.
@@ -533,7 +597,13 @@ that gate is reached. Remaining:
    our post-2018-04-30 candidates could even have existed at PeSTo's
    training time? Currently we rely purely on the sequence-level homology
    search (Phase 2), which doesn't need this date, so this is optional
-   extra corroboration rather than a blocker.
+   extra corroboration rather than a blocker. *Partial empirical evidence
+   found 2026-09-16:* stratifying the full-scale Phase 2 leakage flags by
+   candidate release year shows near-total (99-100%) `pesto_homolog_overlap`
+   for 2018-2020-released chains, dropping to a ~60% plateau from 2021
+   onward — consistent with (not proof of) PeSTo's training snapshot
+   extending to roughly 2020-2021, well past the AF2 2018-04-30 cutoff. See
+   `data/interim/leakage_by_release_year.csv` and PROGRESS.md.
 3. What preregistered significance threshold should the Phase 9 gate use
    (this plan assumes Wilcoxon p<0.05 on the primary mode plus a
    pLDDT-band effect in Phase 8) — confirm before Phase 7 runs, so the gate
