@@ -147,3 +147,36 @@ SASA_BURIAL_CUTOFF_ANGSTROM2 = 1.0
 # even before any partner is added) -- see PLAN.md Phase 5 for the
 # reasoning and citation.
 SURFACE_RSA_THRESHOLD = 0.25
+
+# --- Phase 6: PeSTo inference ---------------------------------------------
+
+# Maximum heavy-atom count for a single PeSTo input (one chain, one
+# variant). Above this, the job is skipped with reason
+# "exceeds_memory_ceiling" rather than attempted -- profiled directly in
+# this container (7.5 GB total RAM, no GPU): PeSTo's own
+# src/data_encoding.extract_topology builds a full O(n^2) pairwise
+# displacement/distance tensor, so peak memory grows worse than linearly
+# with atom count. Measured peak RSS: 2338 atoms->1.0GB, 4855->2.1GB,
+# 6041->3.0GB, 8833->6.2GB; 13822 atoms was OOM-killed outright. Solving
+# for a peak-memory budget of ~4.8GB (this container's ~6.3GB "available"
+# minus a ~1.5GB headroom, per session instruction) against that empirical
+# curve gives ~7500 atoms -- used as the ceiling for every input variant
+# (exp/af_full/af_trimmed) and also as the basis for the worker
+# concurrency tiers in src/models/run_pesto.py (smaller inputs run with
+# more concurrent workers, larger ones with fewer, so no combination of
+# simultaneously-running jobs is projected to exceed this same budget).
+PESTO_MAX_ATOMS = 7500
+
+# Fixed, conservative concurrency schedule for src.models.run_pesto:
+# (max_atoms_in_tier_exclusive, n_workers, n_torch_threads_per_worker).
+# Tiers are processed in ascending order, one fully before the next, so
+# memory from different tiers is never concurrent. Each tuple's
+# n_workers * n_torch_threads_per_worker <= os.cpu_count() in this
+# container (10), and n_workers * (worst-case peak memory for that tier's
+# atom range, read off the PESTO_MAX_ATOMS profiling curve above) stays
+# under the same ~4.8GB budget.
+PESTO_CONCURRENCY_TIERS = (
+    (2000, 4, 2),
+    (5000, 2, 3),
+    (PESTO_MAX_ATOMS, 1, 4),
+)

@@ -37,9 +37,18 @@ true biological assembly would have manufactured fake interfaces almost
 everywhere (only 1/2,604 chains would show zero ASU-only partners, vs.
 75 chains correctly excluded as genuinely monomeric once the real
 biological assembly is used) — see "Decisions already made" and `PLAN.md`
-Phase 5. **Do not start Phase 6 without an explicit go-ahead** (explicit
-instruction this session) — see "Completed phases" for Phase 5's numbers
-and "Next step" for what's pending.
+Phase 5. **Phase 6 (PeSTo inference) is now done too, lean scope** — the
+primary set only (566 chains), `exp`+`af_trimmed` inputs only (`af_full`
+and the apo arm deferred, see the lean-scope decision below). **All
+566/566 chains succeeded on both inputs, zero failures, zero inputs
+exceeded the memory ceiling** (the lean scope's real primary-set atom
+counts turned out to fit comfortably). **Part C sanity check passed:**
+pooled ROC-AUC of PeSTo's experimental-input predictions against Phase
+5's distance labels = **0.882** — confirms the interface channel and
+residue joins are correct before any real benchmarking. **Do not start
+Phase 7 without an explicit go-ahead** (explicit instruction this
+session) — see "Completed phases" for the full numbers and "Next step"
+for what's pending.
 
 The earlier 500-entry pilot run (Phase 1 + Phase 2) is preserved at
 `data/interim/pilot_500/` for before/after comparison, not overwritten.
@@ -190,13 +199,103 @@ assume a green light carries over between sessions.
   `data/interim/phase5_label_agreement.csv` — **new, Phase 5** outputs, see
   "Completed phases" below.
 - `logs/interface_labels.log` — full DEBUG log of the full-scale Phase 5 run.
-- Empty scaffold directories: `data/processed`, `results/`, `notebooks/`
-  (PeSTo's model repo itself has not been checked out here yet — only its
-  split-list files were fetched for investigation; that checkout is a
+- `external/PeSTo/` — **new, Phase 6**: git checkout of `LBM-EPFL/PeSTo`,
+  commit `ba651aa29aaa839d0ee2c458dee90ca1f934d90a` (gitignored, 1.3GB
+  including all 4 released checkpoint variants and their training logs;
+  only `i_v4_1_2021-09-07_11-21/model_ckpt.pt` is actually used).
+- `src/models/run_pesto.py`, `src/models/pesto_worker.py` — Phase 6
+  implementation (see "Completed phases" below).
+  `tests/test_run_pesto.py` (6 tests, passing, no network, no model
+  weights).
+- `scripts/validate_mapping_geometry.py`, `scripts/validate_interface_labels.py`,
+  `scripts/phase6_sanity_check.py` — **new, Phase 6 session**: geometric/
+  spatial verification for Phases 4/5 (ChimeraX not available), and the
+  Part C sanity check. Not part of any pipeline; read already-written
+  outputs.
+- `data/interim/pesto_inputs/*.pdb`/`*.keys.csv` (126 MB) — **new, Phase
+  6**: prepared PeSTo inputs, inspectable.
+- `data/processed/predictions/{exp,af_trimmed}/{pdb_id}_{chain}.parquet`
+  (566 chains each, 6.8 MB total) — **new, Phase 6**: per-residue PeSTo
+  interface-probability predictions.
+- `data/interim/inference_report.csv`, `data/interim/phase6_attrition.csv`,
+  `data/interim/phase4_geometric_validation.csv`,
+  `data/interim/phase5_spatial_verification.csv` — **new, Phase 6 session**
+  outputs, see "Completed phases" below.
+- `logs/phase6_primary.log`, `logs/run_pesto.log` — the former is the
+  nohup-redirected console stream from the full primary run (per this
+  session's explicit request); the latter is `run_pesto.py`'s own DEBUG
+  log (same convention as every other phase).
+- Empty scaffold directories: `results/`, `notebooks/` (`data/processed`
+  is now populated, see above; PeSTo's model repo itself is now checked
+  out too, see above — both were still pending as of the last update, a
   Phase 6 input).
 
 ## Decisions already made (don't re-derive these — see `PLAN.md` for full reasoning)
 
+- **Lean scope for Phases 6-9, decided 2026-09-17** — see `PLAN.md`
+  "Scope decision" note. In scope now: Phase 6 on the primary set only
+  (`eligible_homolog`), two inputs (`exp`, `af_trimmed`); Phases 7/8 on
+  those predictions. Deferred (documented, not run): `af_full`, full-size
+  `exact_train`/`none` leakage sensitivity (replaced by a later ~250-chain
+  seeded subsample), the apo/unbound arm, Phase 9 entirely.
+- **A real memory ceiling in this container, found empirically before
+  committing to a full run.** 7.5GB RAM total, no GPU. PeSTo's own
+  `extract_topology` builds a full O(n^2) pairwise-distance tensor, so
+  peak memory grows worse than linearly with atom count: 2338 atoms->1.0GB,
+  4855->2.1GB, 6041->3.0GB, 8833->6.2GB peak RSS; **13822 atoms was
+  OOM-killed outright.** `config.PESTO_MAX_ATOMS = 7500` was derived by
+  solving for peak memory <=~4.8GB (this container's ~6.3GB "available"
+  minus a 1.5GB headroom) against this curve. Under the *original*
+  (non-lean) full scope, a sequential single-worker projection came to
+  **~27 hours**, with ~110 `af_full` inputs alone exceeding the ceiling --
+  this, not just wall-clock convenience, is what motivated the lean-scope
+  decision above. Under the lean scope (primary set, `exp`+`af_trimmed`
+  only), **zero** inputs exceed the ceiling (max real primary-set input
+  was 6,158 atoms) — the lean scope happens to sidestep the memory problem
+  almost entirely, not just the time problem.
+- **PeSTo's own code and this project's own `src` package collide if both
+  are ever imported in the same process.** PeSTo does absolute imports of
+  a top-level package literally named `src` (`from src.model_operations
+  import ...`); if this project's own `src` package has *also* been bound
+  in `sys.modules` in that process (which happens automatically just by
+  virtue of `src.models.run_pesto` itself being part of that package),
+  Python's namespace-package resolution silently returns the wrong `src`
+  (confirmed interactively: `import src.dataset` inside a `-c`/interactive
+  session resolved to *this project's* `src/__init__.py`, not PeSTo's,
+  because the cwd-derived `''` sys.path entry -- present only in
+  `-c`/interactive/`-m` invocations, not plain script execution -- let a
+  *regular* package (ours, has `__init__.py`) outrank PeSTo's *bare*
+  `src/` directory found earlier in `sys.path`, and a regular package
+  always wins over accumulated namespace portions regardless of order).
+  Fix: `src/models/pesto_worker.py` is invoked only as a bare script
+  (`python pesto_worker.py ...`, never `-m`/`import`), which keeps
+  `sys.path[0]` at the worker file's own directory and never introduces
+  the project root or cwd -- confirmed empirically to avoid the collision.
+  This also happens to be exactly the process-isolation boundary needed
+  for OOM containment (see below), so one design choice covers both needs.
+- **One OS subprocess per (chain, input-variant) job, not a persistent
+  multi-job worker.** Chosen for the two reasons above (OOM isolation,
+  `sys` collision avoidance) over a more complex batched-worker design
+  that would need partial-completion bookkeeping when a worker crashes
+  mid-batch -- "keep it simple" per this session's brief. Reload overhead
+  (~1-3s/job: Python startup + PeSTo imports + model load) is real but
+  small relative to per-job inference time for anything but the tiniest
+  chains, and negligible relative to total run time.
+- **Residue order in PeSTo's output can be trusted without coordinate
+  matching, but only because this project's own input files are written
+  in a fully-controlled order.** PeSTo's own preprocessing
+  (`clean_structure`) renumbers residues sequentially in file-encounter
+  order (correctly treating insertion-code changes as new-residue
+  boundaries); a later step can physically move a HETATM-flagged residue's
+  (e.g. a modified residue like MSE) *atoms* elsewhere in the concatenated
+  array, but `pt.unique()`-based grouping sorts by that renumbering, which
+  was assigned *before* the reordering -- so it recovers true file order
+  regardless. Confirmed with a synthetic MSE-containing fixture before
+  relying on it. Consequence: `src/models/run_pesto.py` writes each
+  chain's residues in a fully-controlled sorted order and zips PeSTo's
+  output row *i* onto that same row *i*, with no coordinate-based matching
+  needed (unlike Phase 5's assembly-copy selection, which *did* need
+  coordinate verification for a different reason).
 - **Interface partners must be computed in the true biological assembly,
   never the raw asymmetric unit — confirmed decisive on real data,
   2026-09-17.** Comparing the two directly (`n_partner_chains_asu_only`
@@ -829,12 +928,144 @@ this session's conversation.
 hand-built mmCIF fixtures with real assembly categories) — see `PLAN.md`
 Phase 5 for the full list of covered cases.
 
+### Phase 4 addendum — geometric validation (2026-09-17)
+
+`scripts/validate_mapping_geometry.py`: Kabsch/SVD-superposed each
+primary-set chain's experimental Calpha atoms onto the AlphaFold model's
+Calpha atoms at the same UniProt positions (one rigid-body fit per chain),
+for all 579 primary-set Phase-4-mapped chains.
+
+**Overall fit is very good: median per-chain Calpha distance 0.82A, mean
+2.02A** (`data/interim/phase4_geometric_validation.csv`). **94/579 (16.2%)
+chains were flagged** for a run of >=5 consecutive residues staying >10A
+apart even after the best possible global fit.
+
+**Investigated rather than taken at face value, since 16% seemed high.**
+Cross-checked the flagged chains against Phase 4's own recorded
+method/identity: 87/94 flagged chains used the **SIFTS** method (the more
+trustworthy of the two, driven by PDBe's own curated per-residue UniProt
+cross-references) with **median sequence identity 1.000** (mean 0.996) —
+i.e. the mapping itself is about as trustworthy as this project's data
+gets. Spot-checked the single most extreme case (`9F07_C`, 100% of
+residues flagged): sequence identity 95.2% (79/83 residues), and the
+AlphaFold model's own pLDDT over the same range averages 92.1 (min 53) —
+a *confident* AlphaFold prediction, not a low-confidence/disordered region
+that would explain the gap as "AlphaFold didn't know." **Conclusion: this
+is not a Phase 4 mapping defect** (the sequence-level correspondence is
+essentially perfect) but genuine AlphaFold-vs-experimental-structure
+divergence in 3D despite a confident, correct prediction of *what* protein
+and *which* residues — i.e. exactly the phenomenon this whole project
+exists to measure, previewed here rather than discovered as a bug. Caveat
+worth carrying forward: a single global rigid-body fit will also flag
+genuine multi-domain hinge motion (two well-fitting sub-domains, wrongly
+"far apart" only because one global rotation can't satisfy both) as if it
+were the same kind of problem -- this script doesn't yet distinguish the
+two, so the 94-chain count is an upper bound on "interesting 3D
+divergence," not a clean count of any one specific phenomenon.
+
+### Phase 5 addendum — programmatic spatial verification (2026-09-17)
+
+Since ChimeraX wasn't available for hand verification, and per this
+session's instruction to attempt an independent external check first:
+`scripts/validate_interface_labels.py` tried PDBe's PISA/interface-
+annotation API (`interfacelist`, `pdbe_pisa/interface_residues` — 3
+endpoint-pattern variants tried) for a seeded sample of 20 primary-set
+chains; **none returned data this session** (all either 404 or a JSON
+"Not Found" body, suggesting either the endpoint pattern itself is no
+longer current, PDBe's PISA doesn't have annotations for the queried
+entries, or both) — falling back to the two geometric checks specified as
+the fallback, on the same 20-chain seeded sample (seed=0):
+
+- **Contiguity:** mean 98.6% of interface residues have another interface
+  residue within 8A (19/20 chains at 91-100%, one chain — not shown
+  separately, all were reasonably high). Interface residues are
+  overwhelmingly clustered into real patches, not scattered.
+- **Centroid:** 19/20 chains (95%) have their interface patch's centroid
+  closer to the partner chain's centroid than a same-chain sample of
+  comparably-exposed non-interface surface residues' centroid is. The one
+  exception (`7YCJ_B`: interface-to-partner 22.4A vs. surface-to-partner
+  13.4A) is a plausible geometry-dependent outlier (e.g. an
+  asymmetric/wrapping partner), not inspected further.
+
+Both checks support the interface labels being spatially real and correct
+-- see `data/interim/phase5_spatial_verification.csv` for the full table.
+
+### Phase 6 — PeSTo inference on isolated single chains (lean scope)
+
+**Done (2026-09-17), lean scope: primary set only (566 chains), `exp`+`af_trimmed`
+inputs only.** `src/models/run_pesto.py` + `src/models/pesto_worker.py`,
+runnable as `.venv/bin/python -m src.models.run_pesto --subset primary
+--inputs exp,af_trimmed`. See `PLAN.md` Phase 6 for the full design
+(PeSTo setup/reproduction, the memory ceiling, the `sys.modules`
+collision and why each job is its own subprocess, concurrency tiers,
+resumability).
+
+**Smoke test (5 smallest primary chains, then a stratified 67-chain
+timing sample spanning the real atom-count distribution) before
+committing to the full run:** all succeeded; remeasured projection for
+the full 566-chain/1,132-job primary run was **~1.3 hours** — comfortably
+under the 3-hour flag threshold, so the full run launched without pausing
+to ask.
+
+**Full run launched as a true detached background process**
+(`nohup ... > logs/phase6_primary.log 2>&1 &` + `disown`, per this
+session's explicit request that it survive the session's own tool-call
+lifecycle) and monitored periodically until completion.
+
+**Wall-clock: 1h04m52s** (03:40:55-04:45:47) for the run as launched;
+this included resuming 77 jobs already completed during the smoke-test/
+timing-sample phase, so no work was wasted. CPU-time sum across all
+1,132 jobs: ~3.1 hours (parallelized across the 4/2/1-worker tiers, so
+wall-clock is well under that).
+
+**Result: 566/566 primary-set chains (100%) succeeded on both `exp` and
+`af_trimmed` -- zero failures, zero jobs exceeded the memory ceiling.**
+The lean scope's real atom counts turned out to fit comfortably: max
+observed input size was 6,158 atoms, safely under `PESTO_MAX_ATOMS`
+(7,500) -- the memory-ceiling concern that drove the lean-scope decision
+was almost entirely an `af_full`/full-scope problem, not a primary-set
+`exp`/`af_trimmed` one. Join verification (every successful output
+covers every one of Phase 4's mapped residues for that chain) passed
+with zero problems.
+
+**Per-job runtime** (`data/interim/inference_report.csv`): `exp` mean
+9.9s (median 8.8s, max 30.4s); `af_trimmed` mean 9.9s (median 8.5s, max
+30.4s) -- consistent between the two input types, as expected since
+runtime is driven by atom count, not which structure it came from.
+
+**Missing heavy atoms** (`exp` only, truncated sidechains vs. the ideal
+count for that residue type): only 1.35% of the 95,492 predicted
+residues have any missing heavy atoms -- most experimental structures in
+this resolution-filtered dataset are essentially complete.
+
+**Part C sanity check (`scripts/phase6_sanity_check.py`): pooled ROC-AUC
+of `exp` predictions against Phase 5's distance labels = 0.882**
+(per-chain mean 0.843, median 0.901, n=554 chains with both classes
+present; 12 chains skipped from the per-chain figure for having only one
+label class). Well above chance, matching PeSTo's own reported accuracy
+on experimental structures -- **the interface channel, residue joins,
+and alt-loc handling are all confirmed correct.**
+
+**Tests:** `tests/test_run_pesto.py` (6 tests, no network, no model
+weights) -- see `PLAN.md` Phase 6 for the full list of covered cases.
+
+**Nothing unexpected in the failure mix, because there wasn't one** --
+every job succeeded. The two real surprises this session were both found
+*before* the full run (the memory ceiling and the `sys.modules`
+collision, both in "Decisions already made" above), which is exactly why
+the smoke-testing and calibration steps existed.
+
 ## Next step
 
-**Do not start Phase 6** (explicit instruction this session) — Phase 5's
-outputs (`data/interim/labels_report.csv`, `data/interim/interface_labels/`)
-are ready to be consumed by it when that go-ahead comes. Phase 6
-(`PLAN.md`) is **PeSTo inference on isolated single chains**.
+**Do not start Phase 7** without an explicit go-ahead (explicit
+instruction this session) -- Phase 6's outputs
+(`data/processed/predictions/{exp,af_trimmed}/`,
+`data/interim/inference_report.csv`) are ready to be consumed by it. When
+Phase 7 does start, it should also generate the ~250-chain seeded
+subsamples for the `exact_train`/`none` leakage-sensitivity modes per the
+lean-scope decision (`PLAN.md`), which will need their own Phase 6
+inference run first (not yet done -- only the primary set has
+predictions so far).
 
 Open question #3 from `PLAN.md` §5 (the Phase 9 significance threshold)
 is still unresolved and still cheap to decide now.

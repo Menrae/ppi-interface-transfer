@@ -210,7 +210,27 @@ detailed, actively-maintained log this section is drawn from.*
   579 representatives (98%) now have interface labels — 566/696 (81%) of
   the original leakage-filtered primary set has survived every phase run
   so far, still comfortably above the ≥100 target.
-- ⬜ Phases 6–10 — not yet started.
+- ✅ **Phase 6 — PeSTo inference**: done, on a deliberately narrowed
+  ("lean") scope decided this session: the primary (non-overlapping)
+  benchmark set only, comparing PeSTo's predictions on the real
+  experimental structure against its predictions on the AlphaFold model
+  trimmed to the same covered region (a third variant, the untrimmed
+  full-length AlphaFold model, and the apo/unbound arm, are deferred as
+  documented future work, not run). All 566 of 566 primary-set chains
+  succeeded on both inputs — no failures, and none exceeded this
+  container's memory limits, which a smaller pilot run showed would
+  otherwise be a real risk for the largest proteins. Before trusting any
+  of this, a sanity check compared PeSTo's predictions on real structures
+  against the measured ground-truth interfaces from Phase 5: they agree
+  strongly (a pooled discrimination score of 0.88 out of a possible 1.0,
+  where 0.5 would mean no better than random) — confirming the whole
+  pipeline is wired correctly before any real benchmarking begins.
+  Two additional automated checks (substituting for visual inspection)
+  were also run this session: the AlphaFold-vs-experimental structural
+  agreement for the primary set, and the spatial plausibility of Phase
+  5's interface labels — both described further in `PROGRESS.md`.
+- ⬜ Phases 7–10 — not yet started (do not start without confirming the
+  sanity-check result above first).
 
 ## 6. Repository layout
 
@@ -274,11 +294,23 @@ sequence-identity cutoffs, etc.) are centralized in `src/config.py` — see
 # chosen biological assembly directly from RCSB) for N random labeled
 # primary-set chains
 .venv/bin/python scripts/spot_check_interfaces.py --n 3 --seed 0
+
+# Phase 6: PeSTo inference (primary set, exp + af_trimmed; lean scope)
+# (writes data/processed/predictions/{exp,af_trimmed}/*.parquet)
+.venv/bin/python -m src.models.run_pesto --subset primary --inputs exp,af_trimmed
+
+# Part C sanity check: pooled ROC-AUC of exp predictions vs. Phase 5 labels
+.venv/bin/python scripts/phase6_sanity_check.py
+
+# Geometric/spatial verification (substitutes for ChimeraX-based checks)
+.venv/bin/python scripts/validate_mapping_geometry.py
+.venv/bin/python scripts/validate_interface_labels.py --n 20 --seed 0
 ```
 
 All download-based commands (Phases 1-3) cache every downloaded file
 under `data/raw/`, so rerunning them doesn't re-fetch anything that's
-already on disk. Phases 4-5 are purely local computations (no network).
+already on disk. Phases 4-6 are purely local computations (no network,
+aside from Phase 6's one-time `external/PeSTo` git clone).
 
 ## 7. Deviations from the original proposal
 
