@@ -190,7 +190,27 @@ detailed, actively-maintained log this section is drawn from.*
   579 of 609 representatives (95%) now have a validated mapping —
   579/696 (83%) of the original leakage-filtered primary set has survived
   every phase run so far, still comfortably above the ≥100 target.
-- ⬜ Phases 5–10 — not yet started.
+- ✅ **Phase 5 — Ground-truth interface labels**: done, full scale, all
+  2,604 Phase-4-mapped representatives. For each chain, this step finds
+  its real partner protein chain(s) in the crystal and labels which of
+  its residues sit at that interface — using the true biological
+  assembly (the depositor's annotated functional unit) rather than the
+  raw crystal contents, since crystals routinely pack unrelated copies
+  of a protein right next to each other with no biological meaning. That
+  distinction mattered enormously in practice: only 1 of 2,604 chains
+  would appear to have zero partners if the raw crystal contents were
+  used directly, but 75 chains are correctly recognized as having no real
+  biological partner once the proper functional assembly is used instead
+  — i.e. crystal packing would have manufactured a fake interface for
+  nearly every genuinely single-chain protein in the dataset had this
+  distinction not been made. 2,527/2,604 chains (97%) were labeled
+  successfully; two independent labeling methods (a distance-based
+  measure and a buried-surface-area-based measure) agree on 90% of
+  residues pooled across all chains. For the primary benchmark set, 566 of
+  579 representatives (98%) now have interface labels — 566/696 (81%) of
+  the original leakage-filtered primary set has survived every phase run
+  so far, still comfortably above the ≥100 target.
+- ⬜ Phases 6–10 — not yet started.
 
 ## 6. Repository layout
 
@@ -245,11 +265,20 @@ sequence-identity cutoffs, etc.) are centralized in `src/config.py` — see
 # mapped primary-set chains (seeded, so re-running with the same --seed
 # picks the same chains)
 .venv/bin/python scripts/spot_check_mapping.py --n 3 --seed 0
+
+# Phase 5: ground-truth interface labels (distance + buried-surface-area)
+# (writes data/interim/labels_report.csv, interface_labels/*.parquet)
+.venv/bin/python -m src.data.interface_labels
+
+# Hand-verification: prints a table + ChimeraX commands (fetching the
+# chosen biological assembly directly from RCSB) for N random labeled
+# primary-set chains
+.venv/bin/python scripts/spot_check_interfaces.py --n 3 --seed 0
 ```
 
 All download-based commands (Phases 1-3) cache every downloaded file
 under `data/raw/`, so rerunning them doesn't re-fetch anything that's
-already on disk. Phase 4 is a purely local computation (no network).
+already on disk. Phases 4-5 are purely local computations (no network).
 
 ## 7. Deviations from the original proposal
 

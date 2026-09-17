@@ -130,3 +130,20 @@ MIN_MAPPED_COVERAGE = 0.80
 # mutations while still catching frame-shift-scale misalignment, which
 # typically produces near-zero identity, not a borderline value.
 RESIDUE_MAPPING_VALIDATION_IDENTITY = 0.90
+
+# --- Phase 5: ground-truth interface labels ------------------------------
+
+# Minimum ΔSASA (isolated chain minus the chain in its biological-assembly
+# context), in square Angstrom, for a residue to count as buried by
+# complex formation under the robustness (SASA-based) label. Given
+# directly by the Phase 5 specification, not independently derived here.
+SASA_BURIAL_CUTOFF_ANGSTROM2 = 1.0
+
+# Minimum relative solvent accessibility (isolated chain) for a residue to
+# count as "surface" when Phase 5/7 report interface fraction among
+# surface residues specifically, as opposed to all residues. 0.25 is a
+# widely used rule-of-thumb cutoff for "exposed" in the structural biology
+# literature (residues below this are considered buried in the monomer
+# even before any partner is added) -- see PLAN.md Phase 5 for the
+# reasoning and citation.
+SURFACE_RSA_THRESHOLD = 0.25
