@@ -78,10 +78,12 @@ structure predictor — see [Deviations](#deviations-from-the-original-proposal)
 Concretely, this project asks: **how much does PeSTo's interface-prediction
 accuracy drop when it's given an AlphaFold structure instead of an
 experimental one for the same protein, and can that drop be explained by
-AlphaFold's own confidence scores?** If the answer is "yes, and it's tied to
-low pLDDT," a natural follow-up is whether giving PeSTo access to pLDDT as
-an input can recover some of the lost accuracy — this project also makes a
-first attempt at that.
+AlphaFold's own confidence scores?** The answer turned out to be yes, and
+tied to low pLDDT (Phase 8) — a natural follow-up is whether giving PeSTo
+access to pLDDT as an input, or simply filtering on it, can recover some of
+the lost accuracy. This project tested the simpler filtering version
+directly (Phase 8b) and found it doesn't help much; training PeSTo on
+pLDDT as an input feature (Phase 9) remains future work, not yet attempted.
 
 ## 4. Approach
 
@@ -138,7 +140,7 @@ summary of *why* each phase is designed the way it is.
 
 ## 5. Current status
 
-*Last updated: 2026-09-17. See [`PROGRESS.md`](PROGRESS.md) for the
+*Last updated: 2026-09-18. See [`PROGRESS.md`](PROGRESS.md) for the
 detailed, actively-maintained log this section is drawn from.*
 
 - ✅ **Phase 1 — Candidate selection**: done, run at full scale against the
@@ -279,13 +281,45 @@ detailed, actively-maintained log this section is drawn from.*
   Full numbers and figures are in `results/error_analysis/` and
   `results/figures/`, and described further in `PROGRESS.md` and
   `PLAN.md`.
+- ✅ **Phase 8b — pLDDT-filtering deployment check (post-hoc, exploratory)**:
+  done. Phase 8's write-up had informally called pLDDT an "actionable"
+  signal for flagging unreliable AlphaFold-input predictions without ever
+  testing that directly — this phase tests it. **Headline finding: it
+  doesn't help much.** Discarding low-pLDDT residues at a fixed prediction
+  threshold barely moves AlphaFold-input accuracy (a ~0.007-point gain in
+  F1 from no filtering to the strictest cutoff, not clearly distinguishable
+  from no improvement given the uncertainty), while throwing away 43% of
+  the true interface residues at that same strictest cutoff. Reported
+  plainly as a limited result, not reframed as a success — this replaced
+  the earlier, untested "actionable" language in the paper. Explicitly
+  marked as post-hoc/exploratory (the idea only came up after seeing Phase
+  7/8's results), not a pre-registered confirmatory test. Full numbers in
+  `results/error_analysis/plddt_filtering.csv`.
 - ⬜ Phase 9 (pLDDT-augmented fine-tuning) — both of its pre-registered
   gate conditions are now satisfied (Phase 7 found a significant gap, and
   Phase 8 tied it to AlphaFold's confidence score), but this project is
   deliberately not attempting Phase 9 this pass regardless, per the lean
   scope decided at Phase 6 — it remains documented future work, not
-  something currently planned. Phase 10 (report generation) is also not
-  yet started.
+  something currently planned. Phase 8b's result doesn't resolve whether a
+  *learned* pLDDT-aware model (Phase 9) would fare better than the naive
+  fixed-threshold filter it actually tested. Phase 10 (report generation)
+  has not been formally started, though `paper/results_paper.pdf` (see
+  below) now covers most of what it would have produced.
+- ✅ **Results paper** (`paper/results_paper.pdf`, built by
+  `paper/build_paper.py` — see "Building the results paper" below):
+  written this session, then adversarially audited against the underlying
+  data in the same session. The audit found and fixed a terminology
+  inconsistency (the 696-representative leakage-filtered set and the
+  566-chain final analyzed set were both being called "the primary
+  benchmark set"), a real mischaracterization of a Phase 1 filter
+  ("modeled residues" — it's actually the polymer entity's full sequence
+  length, which differs from the number of residues actually resolved in
+  the structure for 86% of candidates), an unexplained 1-residue
+  discrepancy between two pooled-residue counts (traced to a single
+  non-standard residue with an undefined solvent-accessibility reference
+  value, now logged), and two bugs in the documented reproduction
+  commands (see "Reproducing the environment" below). See `PROGRESS.md`
+  for the full list.
 
 ## 6. Repository layout
 
@@ -317,78 +351,123 @@ All file paths and tunable thresholds (resolution cutoffs, date cutoffs,
 sequence-identity cutoffs, etc.) are centralized in `src/config.py` — see
 `CLAUDE.md` for the full set of repository conventions.
 
-### Running the completed phases
+### Running the full pipeline from a clean checkout
+
+The sequence below is the exact, complete set of commands that reproduces
+every number in this repository and in `paper/results_paper.pdf`, run in
+order, on a fresh checkout. Nothing here depends on a file that exists only
+because of some other, undocumented one-off command — every input any step
+reads was itself produced by an earlier step in this same list (verified
+2026-09-18; see PROGRESS.md for the audit). Each entry notes whether it
+needs network access and its approximate wall-clock time, measured on this
+project's container (10 CPUs, no GPU, 7.5GB RAM). **Steps marked NETWORK
+cache everything they fetch under `data/raw/`** (CLAUDE.md convention), so
+re-running them after an interruption doesn't re-fetch anything already on
+disk, and only the first run pays the full network cost.
 
 ```bash
-# Phase 1: candidate complex selection (writes data/interim/candidates.csv)
-.venv/bin/python -m src.data.select_complexes --max-entries 500
+# Phase 1: candidate complex selection -- NETWORK (RCSB Search/GraphQL APIs)
+# ~100s for the full, uncapped search. Omit --max-entries entirely: that
+# flag exists only for a fast (~10s) smoke test on a small, non-representative
+# subset -- the real analysis (22,887 candidate chains, 8,808 entries as of
+# the run that produced this project's numbers) used no cap. Note that PDB
+# grows over time, so an uncapped rerun today will not byte-for-byte match
+# the committed candidates.csv from a run on an earlier date.
+# (writes data/interim/candidates.csv)
+.venv/bin/python -m src.data.select_complexes
 
-# Phase 2: redundancy reduction + PeSTo leakage flagging
+# Phase 2: redundancy reduction + PeSTo leakage flagging -- NETWORK the
+# first time only (downloads PeSTo's published split files and the bulk
+# PDB pdb_seqres.txt.gz; both cached after that), then local MMseqs2
+# clustering + homology search. Not separately timed this session; local
+# compute only once its inputs are cached, comparable in scale to Phase 4
+# (minutes, not hours) -- see logs/cluster_and_split.log for a full trace.
 # (writes data/interim/candidates_dedup.csv, clusters.tsv, leakage_threshold_sweep.csv)
 .venv/bin/python -m src.data.cluster_and_split
 
-# Phase 3: download PDB (updated mmCIF) + AlphaFold DB structures
+# Phase 3: download PDB (updated mmCIF) + AlphaFold DB structures -- NETWORK,
+# ~71 minutes for the full 3,009-representative download. Add
+# --estimate-only first to preview the time/disk projection without
+# downloading anything.
 # (writes data/interim/fetch_report.csv, phase3_attrition.csv)
 .venv/bin/python -m src.data.fetch_structures
-# add --estimate-only to see the pre-flight time/disk projection without downloading
 
-# Phase 4: residue-numbering mapping (experimental <-> AlphaFold)
+# Phase 4: residue-numbering mapping -- LOCAL ONLY, ~2.5 minutes
 # (writes data/interim/mapping_report.csv, residue_mappings/*.parquet)
 .venv/bin/python -m src.data.align_residues
 
-# Hand-verification: prints a table + ChimeraX commands for N random
-# mapped primary-set chains (seeded, so re-running with the same --seed
-# picks the same chains)
+# Hand-verification (optional, not read by any later step): prints a table +
+# ChimeraX commands for N random mapped primary-set chains
 .venv/bin/python scripts/spot_check_mapping.py --n 3 --seed 0
 
-# Phase 5: ground-truth interface labels (distance + buried-surface-area)
+# Phase 5: ground-truth interface labels -- LOCAL ONLY, ~4.5 minutes
 # (writes data/interim/labels_report.csv, interface_labels/*.parquet)
 .venv/bin/python -m src.data.interface_labels
 
-# Hand-verification: prints a table + ChimeraX commands (fetching the
-# chosen biological assembly directly from RCSB) for N random labeled
-# primary-set chains
+# Hand-verification (optional, not read by any later step): prints a table +
+# ChimeraX commands (fetching the chosen biological assembly directly from
+# RCSB) for N random labeled primary-set chains
 .venv/bin/python scripts/spot_check_interfaces.py --n 3 --seed 0
 
-# Phase 6: PeSTo inference (primary set, exp + af_trimmed; lean scope)
+# Phase 6: PeSTo inference (primary set, exp + af_trimmed; lean scope) --
+# LOCAL ONLY (one-time NETWORK git clone of external/PeSTo the first time
+# only), ~65 minutes for the full 566-chain/1,132-job primary-set run
 # (writes data/processed/predictions/{exp,af_trimmed}/*.parquet)
 .venv/bin/python -m src.models.run_pesto --subset primary --inputs exp,af_trimmed
 
-# Part C sanity check: pooled ROC-AUC of exp predictions vs. Phase 5 labels
+# Sanity check (optional, not read by any later step): pooled ROC-AUC of
+# exp predictions vs. Phase 5 labels -- worth checking before trusting
+# Phase 7/8, but nothing downstream reads its output
 .venv/bin/python scripts/phase6_sanity_check.py
 
-# Geometric/spatial verification (substitutes for ChimeraX-based checks)
+# Geometric verification -- LOCAL ONLY, a few seconds. NOT OPTIONAL despite
+# living in scripts/: src/analysis/benchmark.py reads
+# data/interim/phase4_geometric_validation.csv directly for the
+# "geometrically flagged" stratum, and src/analysis/error_analysis.py
+# depends on it transitively through benchmark.py's load_chain_metadata().
+# Phase 7 will still run without it, but silently drops that stratum.
 .venv/bin/python scripts/validate_mapping_geometry.py
+
+# Spatial verification (optional, not read by any later step) -- best-effort
+# PDBe PISA network calls with a local geometric fallback; safe to skip
 .venv/bin/python scripts/validate_interface_labels.py --n 20 --seed 0
 
-# Phase 7: benchmarking PeSTo on exp vs. af_trimmed (primary set, lean scope)
+# Phase 7: benchmarking PeSTo on exp vs. af_trimmed -- LOCAL ONLY, ~10s
 # (writes results/benchmark/{per_chain_metrics,summary,strata,exclusions}.csv,
 # results/figures/*.png)
 .venv/bin/python -m src.analysis.benchmark
 
-# Phase 8: error analysis (primary set, lean scope) -- pLDDT bands, local
-# RMSD, RSA, secondary structure vs. prediction shift
+# Phase 8: error analysis -- pLDDT bands, local RMSD, RSA, secondary
+# structure vs. prediction shift -- LOCAL ONLY, ~3 minutes
 # (writes results/error_analysis/*.csv + *.parquet, results/figures/error_analysis_*.png)
 .venv/bin/python -m src.analysis.error_analysis
+
+# Phase 8b: pLDDT-filtering deployment check (post-hoc, exploratory -- see
+# PLAN.md; not pre-registered before Phase 7/8's own results were seen) --
+# LOCAL ONLY, ~5 seconds
+# (writes results/error_analysis/plddt_filtering.csv,
+# results/figures/error_analysis_plddt_filtering.png)
+.venv/bin/python -m src.analysis.plddt_filtering
+
+# Results paper -- LOCAL ONLY, well under a minute (matplotlib figure
+# generation + two pdflatex passes)
+# (writes paper/results_paper.pdf, paper/figures/*)
+.venv/bin/python paper/build_paper.py
 ```
 
-All download-based commands (Phases 1-3) cache every downloaded file
-under `data/raw/`, so rerunning them doesn't re-fetch anything that's
-already on disk. Phases 4-6 are purely local computations (no network,
-aside from Phase 6's one-time `external/PeSTo` git clone).
+### Rebuilding just the paper
 
-### Building the results paper
-
-`paper/results_paper.pdf` (6-8 page print summary of Phases 1-8, written for
-a general-science-background reader) is fully regenerated -- every number,
-table, and figure -- from `results/` and `data/interim/` by one script:
+Once `results/` and `data/interim/` are populated (i.e. after the sequence
+above, or from an existing checkout that already has them), the
+print summary (9 pages as of the 2026-09-18 audit revision) written for a general-science-background reader can
+be rebuilt on its own, without rerunning any phase:
 
 ```bash
 .venv/bin/python paper/build_paper.py
 ```
 
 This computes every reported statistic directly from the pipeline's own
-output files (never hand-typed), regenerates all 6 figures as print-ready
+output files (never hand-typed), regenerates all 7 figures as print-ready
 vector PDFs (colorblind-safe Okabe-Ito palette; the one exception is the
 example-structure figure, a raster PNG -- see below) into `paper/figures/`,
 fills `paper/template.tex`'s placeholders, and compiles the PDF.
@@ -402,6 +481,41 @@ OSMesa available and no root access to install them -- so
 3D rendering of the Calpha trace, colored by true-interface/predicted-probability
 value (not a rendered molecular surface), exactly as the build script's own
 docstring records.
+
+#### Substituting a rendered structure figure
+
+`build_paper.py` checks for `paper/figures/example_chain_render.png` before
+falling back to the matplotlib rendering above: if that file exists, Figure 6
+uses it as-is (no code changes needed) and the caption switches from the
+matplotlib disclaimer to a generic "externally rendered" note. To produce
+one with a real molecular renderer (PyMOL, ChimeraX, etc.):
+
+1. Run `paper/build_paper.py` once (or check its most recent
+   `paper/results_paper.tex` output) to see which chain it selected --
+   the selection is seeded but data-dependent, so don't assume a
+   particular PDB ID; look for the sentence "PDB \_\_\_\_ chain \_\_\_\_,
+   UniProt \_\_\_\_" in Section 3.2 of the compiled paper, or read
+   `EX_PDB_ID`/`EX_CHAIN_ID`/`EX_UNIPROT` out of the script's console output.
+2. The figure should show, side by side, in the same orientation: (a) that
+   chain's experimental structure with its true interface residues
+   highlighted (`data/interim/interface_labels/{pdb_id}_{chain_id}.parquet`,
+   `is_interface_contact` column) against non-interface residues; (b) the
+   same experimental structure colored by PeSTo's per-residue interface
+   probability from the experimental input
+   (`data/processed/predictions/exp/{pdb_id}_{chain_id}.parquet`,
+   `pesto_interface_prob`, a continuous 0-1 colormap); (c) the AlphaFold
+   model trimmed to the same mapped residues, colored by PeSTo's
+   per-residue interface probability from the AlphaFold input
+   (`data/processed/predictions/af_trimmed/{pdb_id}_{chain_id}.parquet`,
+   joined on `uniprot_resnum`). Rendering (b) and (c) in the same camera
+   orientation (e.g. by aligning the AlphaFold model onto the experimental
+   structure first, as `build_paper.py`'s own Kabsch superposition does)
+   makes the two easy to compare directly.
+3. Save the result to `paper/figures/example_chain_render.png` (roughly
+   6.6in wide by 2.4in tall at >=150 DPI reads well at print size, but an
+   exact match isn't required).
+4. Rerun `.venv/bin/python paper/build_paper.py` -- it picks the file up
+   automatically.
 
 ## 7. Deviations from the original proposal
 

@@ -43,12 +43,14 @@ PeSTo is a geometric deep-learning model that predicts protein--protein
 interface residues from atomic coordinates, trained only on experimentally
 determined structures. Because most protein structures available today are
 AlphaFold predictions, we ask whether PeSTo's accuracy transfers to AlphaFold
-input. We assembled @@N_LABELED@@ protein chains from PDB complexes released
-after AlphaFold2's training cutoff, filtered to under
-@@SEQ_IDENTITY_CUTOFF@@ sequence identity to PeSTo's own training,
-validation, and test sequences, then ran PeSTo on each chain's isolated
-experimental structure and on the matched AlphaFold model trimmed to the same
-residue range. Across @@PRIMARY_N@@ chains with defined metrics, PeSTo's
+input. Starting from PDB complexes released after AlphaFold2's training
+cutoff and filtered to under @@SEQ_IDENTITY_CUTOFF@@ sequence identity to
+PeSTo's own training, validation, and test sequences, we assembled a primary
+benchmark set of @@N_LABELED@@ protein chains with both an experimental and
+an AlphaFold structure, a validated residue mapping, and interface labels,
+and ran PeSTo on each chain's isolated experimental structure and on the
+matched AlphaFold model trimmed to the same residue range. Across
+@@PRIMARY_N@@ chains with defined metrics, PeSTo's
 per-chain area under the precision--recall curve (AUPR) was higher on
 experimental input by a median of @@PRIMARY_MEDIAN@@ (95\% CI
 @@PRIMARY_CI@@, Wilcoxon $p=$@@PRIMARY_P@@), consistent in direction across
@@ -125,7 +127,10 @@ AlphaFold's training. Candidates were restricted to crystal structures at or
 better than @@RESOLUTION_CUTOFF@@\,\r{A} resolution, complexes of at most
 @@MAX_PROTEIN_ENTITIES@@ distinct protein entities (excluding assemblies too
 large for a single well-defined pairwise interface, e.g.\ viral capsids), and
-chains of at least @@MIN_CHAIN_LENGTH@@ modeled residues. This search returned
+chains whose polymer entity sequence is at least @@MIN_CHAIN_LENGTH@@ residues
+long (the entity's full expressed/construct sequence, not the count of
+residues actually resolved in the deposited coordinates, which is often
+substantially smaller). This search returned
 @@N_ENTRIES@@ PDB entries and @@N_CHAINS@@ candidate protein chains
 (Fig.~\ref{fig:attrition}). Redundant chains were then collapsed by MMseqs2
 sequence clustering to @@N_CLUSTERS@@ non-redundant representatives, one per
@@ -138,11 +143,15 @@ under a different identifier. Each representative was therefore searched by
 MMseqs2 against the union of PeSTo's published training, validation, and test
 sequence sets; @@OVERLAP_PCT@@ of representatives matched at or above
 @@SEQ_IDENTITY_CUTOFF@@ sequence identity to that union and were treated as
-leakage. The primary benchmark set used throughout this paper is the
-@@N_LEAKAGE_FREE@@ representatives below this threshold.
+leakage. The leakage-free candidate set carried forward into the rest of the
+pipeline is the @@N_LEAKAGE_FREE@@ representatives below this threshold; not
+all of them survive the remaining processing steps below, which is why this
+paper distinguishes the leakage-free candidate set (@@N_LEAKAGE_FREE@@) from
+the smaller primary benchmark set that is actually analyzed in Section~3
+(@@N_LABELED@@, defined below).
 
-For each primary-set representative, both the experimental (PDB) structure and
-the corresponding AlphaFold DB model were downloaded; @@N_STRUCTURES@@
+For each leakage-free representative, both the experimental (PDB) structure
+and the corresponding AlphaFold DB model were downloaded; @@N_STRUCTURES@@
 representatives had both available. AlphaFold DB occasionally serves
 third-party community structure models (e.g.\ ColabFold) under the same
 per-accession query as official AlphaFold2 predictions; these were identified
@@ -151,7 +160,7 @@ they do not carry AlphaFold2's training-cutoff guarantee. Residue numbering
 between the experimental structure and the AlphaFold model (which uses
 UniProt-native numbering) was mapped residue by residue using each entry's
 embedded SIFTS cross-references, falling back to a pairwise sequence alignment
-when SIFTS was unavailable or failed a $\geq$90\% identity validation check;
+when SIFTS was unavailable or failed a $\geq$@@MAPPING_VALIDATION_IDENTITY@@ identity validation check;
 @@N_MAPPED@@ representatives obtained a validated mapping.
 
 Ground-truth interface residues were computed directly from coordinates in
@@ -310,12 +319,16 @@ chain-resampled bootstrap CIs.}
 
 A per-residue regression of the absolute prediction shift on standardized
 pLDDT, local RMSD, RSA, and secondary structure (Fig.~\ref{fig:regression},
-Table~\ref{tab:regression}; $n=$@@REG_N@@ residues, @@REG_CLUSTERS@@ chain
+Table~\ref{tab:regression}; $n=$@@REG_N@@ of the @@POOLED_N@@ pooled
+residues -- @@REG_N_DROPPED@@ excluded for a missing RSA value, a single
+non-standard N-terminal residue whose chemical component has no Sander/Rost
+reference accessible-surface-area value, logged during Phase 5 and not
+otherwise informative for this regression -- @@REG_CLUSTERS@@ chain
 clusters, cluster-robust standard errors) finds pLDDT
 (coefficient @@PLDDT_COEF@@, $p=$@@PLDDT_P@@) and local RMSD (coefficient
 @@RMSD_COEF@@, $p=$@@RMSD_P@@) each independently associated with the size of
-the shift in the expected direction -- higher confidence predicts a smaller
-shift, larger local structural divergence predicts a larger one -- after
+the shift in the expected direction -- higher confidence is associated with a
+smaller shift, larger local structural divergence with a larger one -- after
 controlling for the other and for RSA (coefficient @@RSA_COEF@@,
 $p=$@@RSA_P@@). No predictor's variance inflation factor exceeded
 @@VIF_THRESHOLD@@ (maximum @@MAX_VIF@@): despite both being proxies for
@@ -380,11 +393,8 @@ both visibly recover the same overall interface region.
 
 \begin{figure}[t]
 \centering
-\includegraphics[width=0.92\textwidth]{figures/fig6_structure_example.png}
-\caption{A representative chain (C$\alpha$ trace; no headless 3D molecular
-renderer could be installed in this environment, so this is a matplotlib
-rendering of C$\alpha$ positions colored by value, not a rendered surface --
-see Methods discussion in the accompanying repository documentation).
+\includegraphics[width=0.92\textwidth]{@@EX_FIGURE_FILE@@}
+\caption{A representative chain (@@EX_RENDER_NOTE@@).
 (a) True interface residues (green) vs.\ non-interface (grey). (b) PeSTo's
 per-residue interface probability from the experimental structure
 (AUPR @@EX_AUPR_EXP@@ on this chain). (c) PeSTo's per-residue interface
@@ -394,6 +404,70 @@ only (the underlying coordinates, and hence the prediction, come from the
 AlphaFold model).}
 \label{fig:structure}
 \end{figure}
+
+\subsection{Does pLDDT filtering actually help? (post-hoc, exploratory)}
+
+Section~3.2's regression shows pLDDT is \emph{associated} with the size of
+the prediction shift, but that does not by itself establish that discarding
+low-pLDDT residues is a good deployment rule. This subsection tests that
+directly. It was not pre-registered before Phase 7/8 were run -- the
+motivating question only arose from their results -- so it is reported here
+as a post-hoc, exploratory check (pre-registered in writing before these
+specific numbers were computed; see PLAN.md's Phase 8b), not as confirmatory
+evidence.
+
+For both inputs, at a fixed probability threshold (@@FILTER_THRESHOLD@@,
+not tuned per input or cutoff) we swept a pLDDT cutoff
+(@@FILTER_MIN_CUTOFF@@, 50, 70, @@FILTER_MAX_CUTOFF@@) that discards
+residues below it, and recomputed precision, recall, and F1 on what
+remains (Table~\ref{tab:filtering}, Fig.~\ref{fig:filtering}). The
+identical sweep on \emph{experimental} input serves as a reference. Since
+pLDDT is a property of the AlphaFold model shared by both inputs' rows, any
+F1 change on the \emph{exp} curve reflects only the generic effect of
+discarding residues, not anything specific to AlphaFold's structural
+error -- comparing the two curves isolates the latter.
+
+Filtering at @@FILTER_MAX_CUTOFF@@ discards @@FILTER_FRAC_RES_DISCARDED_MAX@@
+of all residues and, importantly, @@FILTER_FRAC_POS_DISCARDED_MAX@@ of the
+true interface residues, while moving AlphaFold-input F1 from
+@@FILTER_F1_AF_0@@ (CI @@FILTER_F1_AF_0_CI@@) to only
+@@FILTER_F1_AF_MAX@@ (CI @@FILTER_F1_AF_MAX_CI@@) -- an absolute gain of
+@@FILTER_AF_F1_GAIN@@, with overlapping confidence intervals, i.e. not
+clearly distinguishable from no improvement at all. The gap to experimental
+input's F1 narrows only slightly, from @@FILTER_GAP_0@@ at no filtering to
+@@FILTER_GAP_MAX@@ at the strictest cutoff, and part of even that narrowing
+is experimental input's own F1 drifting down (@@FILTER_F1_EXP_0@@ to
+@@FILTER_F1_EXP_MAX@@) as its harder, lower-pLDDT residues are discarded too
+-- not AlphaFold input distinctly "catching up." The composition of the
+small gain is also informative: AlphaFold-input precision rises from
+@@FILTER_AF_PRECISION_0@@ to @@FILTER_AF_PRECISION_MAX@@ while recall is
+essentially flat (@@FILTER_AF_RECALL_0@@ to @@FILTER_AF_RECALL_MAX@@) --
+filtering trades a large, real cost in discarded true interface residues
+for a modest precision gain, not a broad quality improvement. At a fixed
+0.5 threshold, pLDDT filtering does not meaningfully close the
+experimental-vs-AlphaFold gap, and its practical benefit here is limited
+relative to its cost.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{figures/fig7_plddt_filtering.pdf}
+\caption{(a) F1 at a fixed 0.5 probability threshold vs.\ pLDDT cutoff, both
+inputs, with 95\% chain-resampled bootstrap CIs. (b) Fraction of all
+residues, and of true interface residues specifically, discarded at each
+cutoff (identical for both inputs, since pLDDT is a property of the
+AlphaFold model, not of which input is scored).}
+\label{fig:filtering}
+\end{figure}
+
+\begin{table}[t]
+\centering
+\footnotesize
+@@FILTER_TABLE@@
+\caption{Precision/recall/F1 (fixed 0.5 threshold) by pLDDT cutoff, both
+inputs, with 95\% chain-resampled bootstrap CIs. Post-hoc, exploratory
+(Section~3.3).}
+\label{tab:filtering}
+\end{table}
 
 \section{Discussion}
 
@@ -427,12 +501,17 @@ accuracy cost concentrates in residues where AlphaFold itself reports low
 confidence and where the local backbone geometry genuinely diverges from the
 experimental structure, and these two signals carry largely independent
 information (low collinearity despite both tracking the same underlying
-divergence). That pLDDT alone predicts where PeSTo will be less reliable on
-AlphaFold input -- without needing the experimental structure to compute local
-RMSD, which is of course unavailable at deployment time -- is the most
-actionable finding here: it suggests a practical, currently unused
-confidence signal for flagging low-reliability regions of PeSTo's predictions
-on AlphaFold-only inputs.
+divergence). But association with a continuous shift is not the same as a
+useful deployment rule, and Section~3.3's direct test of the natural
+follow-on idea -- discard low-pLDDT residues before trusting AlphaFold-input
+predictions -- found limited practical benefit at a fixed threshold: F1
+improved by only @@FILTER_AF_F1_GAIN@@ from no filtering to the strictest
+cutoff, well within overlapping confidence intervals of no improvement at
+all, while discarding @@FILTER_FRAC_POS_DISCARDED_MAX@@ of the true
+interface residues in the process. pLDDT is a real, independent correlate
+of where predictions shift the most; that is a weaker and more qualified
+claim than a validated confidence-based filter, and this paper does not
+claim the latter.
 
 \section{Limitations}
 
@@ -440,7 +519,7 @@ on AlphaFold-only inputs.
 \item \textbf{Temporal skew.} The primary set's leakage-filtering requirement
 (sequence identity below @@SEQ_IDENTITY_CUTOFF@@ against PeSTo's training
 data) leaves it skewed toward chains released in 2021 or later, farther in
-time from AlphaFold's 2018-04-30 cutoff than the filter alone requires; PeSTo's
+time from AlphaFold's @@RELEASE_DATE_CUTOFF@@ cutoff than the filter alone requires; PeSTo's
 own training-data snapshot appears to extend to roughly 2020--2021, later
 than AlphaFold2's cutoff, based on a release-year breakdown of the leakage
 flag (not shown here).
@@ -473,13 +552,17 @@ whether an AlphaFold-predicted complex's own interface would look different.
 The deferred arms noted above -- the untrimmed full-length AlphaFold
 comparison, the unbound/apo arm, and the leakage-sensitivity subsets at looser
 identity thresholds -- remain natural next steps and require no new method,
-only additional runs of the existing pipeline. Given that pLDDT is
-independently associated with prediction reliability (Section~3.2), a
-pLDDT-aware fine-tuning of PeSTo -- adding pLDDT as an extra per-residue input
-channel, training on a mixed set of experimental structures (pLDDT fixed at
-100) and AlphaFold structures (their real pLDDT) -- is a plausible next step
-toward recovering some of the measured accuracy cost, conditional on this
-gap and its pLDDT association, both established here.
+only additional runs of the existing pipeline. Section~3.3 found that simply
+\emph{discarding} low-pLDDT residues at a fixed threshold recovers little of
+the measured accuracy cost, which is itself informative: it suggests the
+useful information in pLDDT is more continuous than a hard cutoff can
+exploit. A pLDDT-\emph{aware} fine-tuning of PeSTo -- adding pLDDT as an
+extra per-residue input channel, training on a mixed set of experimental
+structures (pLDDT fixed at 100) and AlphaFold structures (their real pLDDT)
+-- remains a plausible next step, since a trained model could in principle
+learn a more graded use of the signal than any fixed cutoff; but Section~3.3
+means this should be treated as an open question to test, not a predicted
+win.
 
 \bibliographystyle{plain}
 \begin{thebibliography}{9}

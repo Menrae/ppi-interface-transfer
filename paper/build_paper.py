@@ -35,6 +35,10 @@ from src.analysis import structural_metrics as sme
 
 PAPER_DIR = Path(__file__).resolve().parent
 FIGURES_DIR = PAPER_DIR / "figures"
+# If this file exists, Figure 6 uses it as-is instead of the matplotlib
+# Calpha-trace fallback -- see README.md "Substituting a rendered structure
+# figure" for what it should show and how to produce it.
+EXAMPLE_RENDER_OVERRIDE = FIGURES_DIR / "example_chain_render.png"
 TEMPLATE_PATH = PAPER_DIR / "template.tex"
 TEX_OUTPUT_PATH = PAPER_DIR / "results_paper.tex"
 PDF_OUTPUT_PATH = PAPER_DIR / "results_paper.pdf"
@@ -179,6 +183,10 @@ def load_phase8() -> dict:
     length = pd.read_csv(ERROR_ANALYSIS_DIR / "length_analysis.csv")
     flagged = pd.read_csv(ERROR_ANALYSIS_DIR / "flagged_chains_summary.csv")
     return {"band": band, "regression": regression, "length": length, "flagged": flagged}
+
+
+def load_plddt_filtering() -> pd.DataFrame:
+    return pd.read_csv(ERROR_ANALYSIS_DIR / "plddt_filtering.csv")
 
 
 def select_example_chain(per_chain_wide: pd.DataFrame, median_drop: float, seed: int = 0) -> dict:
@@ -455,6 +463,14 @@ def fig_example_structure(example: dict, path: Path) -> dict:
     merged = merged.merge(af_pred, on="uniprot_resnum", how="inner", suffixes=("_exp", "_af"))
     merged = merged.sort_values("auth_seq_id").reset_index(drop=True)
 
+    if EXAMPLE_RENDER_OVERRIDE.exists():
+        # A real molecular render has been dropped in externally (see
+        # README.md "Substituting a rendered structure figure") -- use it
+        # as-is instead of generating the matplotlib fallback. No
+        # coordinates/plotting needed in this branch.
+        print(f"Using externally provided structure render: {EXAMPLE_RENDER_OVERRIDE}")
+        return {"uniprot_acc": uniprot_acc, "n_residues": len(merged), "rendered_externally": True}
+
     auth_keys = list(zip(merged["auth_seq_id"].astype(int), merged["auth_ins_code"]))
     uniprot_keys = list(merged["uniprot_resnum"].astype(int))
 
@@ -518,7 +534,43 @@ def fig_example_structure(example: dict, path: Path) -> dict:
 
     fig.savefig(path, bbox_inches="tight", dpi=300)
     plt.close(fig)
-    return {"uniprot_acc": uniprot_acc, "n_residues": len(merged)}
+    return {"uniprot_acc": uniprot_acc, "n_residues": len(merged), "rendered_externally": False}
+
+
+# =============================================================================
+# Figure 7: pLDDT-filtering deployment check (Phase 8b, post-hoc/exploratory)
+# =============================================================================
+
+
+def fig_plddt_filtering(curve: pd.DataFrame, path: Path) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(PAGE_WIDTH_IN, 2.5))
+
+    ax = axes[0]
+    for input_name, color, disp in (("exp", BLUE, "Experimental"), ("af_trimmed", ORANGE, "AlphaFold (trimmed)")):
+        sub = curve[curve["input"] == input_name].sort_values("cutoff")
+        ax.plot(sub["cutoff"], sub["f1"], color=color, marker="o", markersize=4, linewidth=1.6, label=disp)
+        ax.fill_between(sub["cutoff"], sub["f1_ci_lo"], sub["f1_ci_hi"], color=color, alpha=0.15, linewidth=0)
+    ax.set_xlabel("pLDDT cutoff (kept if pLDDT ≥ cutoff)")
+    ax.set_ylabel("F1 (fixed threshold = 0.5)")
+    ax.set_title("(a) F1 vs. pLDDT cutoff")
+    ax.legend(frameon=False, fontsize=7)
+    style_axes(ax)
+
+    ax = axes[1]
+    ref = curve[curve["input"] == "exp"].sort_values("cutoff")
+    ax.plot(ref["cutoff"], 1 - ref["frac_residues_kept"], color=GREY, marker="s", markersize=4,
+            linewidth=1.6, label="All residues discarded")
+    ax.plot(ref["cutoff"], 1 - ref["frac_positives_kept"], color=VERMILLION, marker="^", markersize=4,
+            linewidth=1.6, label="True interface residues discarded")
+    ax.set_xlabel("pLDDT cutoff")
+    ax.set_ylabel("Fraction discarded")
+    ax.set_title("(b) Cost of filtering")
+    ax.legend(frameon=False, fontsize=7)
+    style_axes(ax)
+
+    fig.tight_layout(pad=0.6)
+    fig.savefig(path, bbox_inches="tight")
+    plt.close(fig)
 
 
 # =============================================================================
@@ -583,6 +635,32 @@ def table_regression(regression: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
+def table_plddt_filtering(curve: pd.DataFrame) -> str:
+    lines = []
+    lines.append(r"\begin{tabular}{lrrrlll}")
+    lines.append(r"\toprule")
+    lines.append(r"Input & Cutoff & \% res. kept & \% interface kept & Precision (95\% CI) & Recall (95\% CI) & F1 (95\% CI) \\")
+    lines.append(r"\midrule")
+    disp = {"exp": "Experimental", "af_trimmed": "AlphaFold trimmed"}
+    cutoffs = sorted(curve["cutoff"].unique())
+    for c in cutoffs:
+        for i, input_name in enumerate(("exp", "af_trimmed")):
+            r = curve[(curve["cutoff"] == c) & (curve["input"] == input_name)].iloc[0]
+            c_label = f"{c:g}" if i == 0 else ""
+            lines.append(
+                rf"{disp[input_name]} & {c_label} & {100 * r['frac_residues_kept']:.1f} & "
+                rf"{100 * r['frac_positives_kept']:.1f} & "
+                rf"{r['precision']:.2f} {fmt_ci(r['precision_ci_lo'], r['precision_ci_hi'], dec=2)} & "
+                rf"{r['recall']:.2f} {fmt_ci(r['recall_ci_lo'], r['recall_ci_hi'], dec=2)} & "
+                rf"{r['f1']:.2f} {fmt_ci(r['f1_ci_lo'], r['f1_ci_hi'], dec=2)} \\"
+            )
+        if c != cutoffs[-1]:
+            lines.append(r"\addlinespace")
+    lines.append(r"\bottomrule")
+    lines.append(r"\end{tabular}")
+    return "\n".join(lines)
+
+
 def table_flagged(flagged: pd.DataFrame) -> str:
     disp = {
         "aupr_drop": "Per-chain AUPR drop", "chain_length": "Chain length (residues)",
@@ -611,6 +689,7 @@ def build_context() -> dict:
     attrition = load_attrition()
     phase7 = load_phase7()
     phase8 = load_phase8()
+    filtering = load_plddt_filtering()
 
     example = select_example_chain(phase7["per_chain_wide"], phase7["primary"]["median_diff"], seed=0)
 
@@ -622,6 +701,7 @@ def build_context() -> dict:
     fig_phase8_shift_and_regression(ERROR_ANALYSIS_DIR / "per_residue_features.parquet", phase8["regression"],
                                      FIGURES_DIR / "fig5_phase8_regression.pdf")
     example_info = fig_example_structure(example, FIGURES_DIR / "fig6_structure_example.png")
+    fig_plddt_filtering(filtering, FIGURES_DIR / "fig7_plddt_filtering.pdf")
 
     primary, roc, robustness = phase7["primary"], phase7["roc"], phase7["robustness"]
     pooled_exp, pooled_af = phase7["pooled_exp"], phase7["pooled_af"]
@@ -660,6 +740,7 @@ def build_context() -> dict:
         "BAND_BOOTSTRAP_N": fmt_n(config.PHASE8_BAND_BOOTSTRAP_N_RESAMPLES),
         "VIF_THRESHOLD": f"{config.VIF_COLLINEARITY_THRESHOLD:g}",
         "SASA_BURIAL_CUTOFF": f"{config.SASA_BURIAL_CUTOFF_ANGSTROM2:g}",
+        "MAPPING_VALIDATION_IDENTITY": fmt_pct(config.RESIDUE_MAPPING_VALIDATION_IDENTITY, 0),
     })
 
     ctx.update({
@@ -686,6 +767,7 @@ def build_context() -> dict:
         "BAND_TABLE": table_band_metrics(band),
         "REGRESSION_TABLE": table_regression(phase8["regression"]),
         "REG_N": fmt_n(regression.loc["plddt_z", "n"]), "REG_CLUSTERS": fmt_n(regression.loc["plddt_z", "n_clusters"]),
+        "REG_N_DROPPED": fmt_n(pooled_exp["n"] - regression.loc["plddt_z", "n"]),
         "PLDDT_COEF": f"{regression.loc['plddt_z','coef']:.4f}", "PLDDT_P": fmt_p_dollars(regression.loc["plddt_z", "p_value"]),
         "RMSD_COEF": f"{regression.loc['local_rmsd_z','coef']:.4f}", "RMSD_P": fmt_p_dollars(regression.loc["local_rmsd_z", "p_value"]),
         "RSA_COEF": f"{regression.loc['rsa_z','coef']:.4f}", "RSA_P": fmt_p_dollars(regression.loc["rsa_z", "p_value"]),
@@ -699,11 +781,52 @@ def build_context() -> dict:
         "FLAGGED_RMSD_P": fmt_p_dollars(flagged.loc["mean_local_rmsd", "mannwhitney_p"]),
     })
 
+    if example_info["rendered_externally"]:
+        ex_figure_file = "figures/example_chain_render.png"
+        ex_render_note = (
+            "externally rendered (see the accompanying repository's README.md "
+            "for what this image shows and how it was produced)"
+        )
+    else:
+        ex_figure_file = "figures/fig6_structure_example.png"
+        ex_render_note = (
+            "no headless 3D molecular renderer could be installed in this "
+            "environment, so this is a matplotlib rendering of C$\\alpha$ "
+            "positions colored by value, not a rendered surface -- see Methods "
+            "discussion in the accompanying repository documentation"
+        )
+
     ctx.update({
         "EX_PDB_ID": str(example["pdb_id"]), "EX_CHAIN_ID": str(example["chain_id"]),
         "EX_UNIPROT": example_info["uniprot_acc"], "EX_N": fmt_n(example["n"]),
         "EX_AUPR_EXP": f"{example['aupr_exp']:.3f}", "EX_AUPR_AF": f"{example['aupr_af']:.3f}",
         "EX_DROP": f"{example['drop']:.3f}",
+        "EX_FIGURE_FILE": ex_figure_file, "EX_RENDER_NOTE": ex_render_note,
+    })
+
+    min_cutoff, max_cutoff = min(config.PLDDT_FILTER_CUTOFFS), max(config.PLDDT_FILTER_CUTOFFS)
+
+    def filt_row(input_name, cutoff):
+        return filtering[(filtering["input"] == input_name) & (filtering["cutoff"] == cutoff)].iloc[0]
+
+    f1_exp_0, f1_af_0 = filt_row("exp", min_cutoff), filt_row("af_trimmed", min_cutoff)
+    f1_exp_max, f1_af_max = filt_row("exp", max_cutoff), filt_row("af_trimmed", max_cutoff)
+
+    ctx.update({
+        "FILTER_THRESHOLD": f"{config.PLDDT_FILTER_PREDICTION_THRESHOLD:g}",
+        "FILTER_MIN_CUTOFF": f"{min_cutoff:g}", "FILTER_MAX_CUTOFF": f"{max_cutoff:g}",
+        "FILTER_TABLE": table_plddt_filtering(filtering),
+        "FILTER_F1_EXP_0": f"{f1_exp_0['f1']:.3f}",
+        "FILTER_F1_AF_0": f"{f1_af_0['f1']:.3f}", "FILTER_F1_AF_0_CI": fmt_ci(f1_af_0["f1_ci_lo"], f1_af_0["f1_ci_hi"]),
+        "FILTER_F1_EXP_MAX": f"{f1_exp_max['f1']:.3f}",
+        "FILTER_F1_AF_MAX": f"{f1_af_max['f1']:.3f}", "FILTER_F1_AF_MAX_CI": fmt_ci(f1_af_max["f1_ci_lo"], f1_af_max["f1_ci_hi"]),
+        "FILTER_GAP_0": f"{f1_exp_0['f1'] - f1_af_0['f1']:.3f}",
+        "FILTER_GAP_MAX": f"{f1_exp_max['f1'] - f1_af_max['f1']:.3f}",
+        "FILTER_AF_F1_GAIN": f"{f1_af_max['f1'] - f1_af_0['f1']:.3f}",
+        "FILTER_AF_PRECISION_0": f"{f1_af_0['precision']:.3f}", "FILTER_AF_PRECISION_MAX": f"{f1_af_max['precision']:.3f}",
+        "FILTER_AF_RECALL_0": f"{f1_af_0['recall']:.3f}", "FILTER_AF_RECALL_MAX": f"{f1_af_max['recall']:.3f}",
+        "FILTER_FRAC_RES_DISCARDED_MAX": fmt_pct(1 - f1_af_max["frac_residues_kept"], 0),
+        "FILTER_FRAC_POS_DISCARDED_MAX": fmt_pct(1 - f1_af_max["frac_positives_kept"], 0),
     })
 
     return ctx

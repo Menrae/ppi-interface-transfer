@@ -1377,6 +1377,151 @@ pass, not conditional on the gate; if Phase 9 is ever picked back up,
 this note is where to look to confirm the gate was already satisfied
 2026-09-17, not something to re-derive.
 
+### Phase 8b — pLDDT-filtering deployment check (post-hoc, exploratory — pre-registered 2026-09-18, *after* Phase 7/8's results were already known)
+
+**This is not a pre-registration in the same sense as Phase 7/8's above.**
+Phase 8's Discussion argued informally that pLDDT is an "actionable" signal
+for flagging unreliable PeSTo predictions on AlphaFold-only input, without
+actually testing a filtering rule. This section is written down *before
+computing the filtering numbers themselves*, so the specific test isn't
+tuned after seeing its own result — but the decision to run this analysis
+at all, and its motivating hypothesis, came *after* seeing Phase 7 and
+Phase 8's results, which is exactly what makes it exploratory rather than
+a true a priori pre-registration. Labeled as such throughout PLAN.md,
+PROGRESS.md, and the paper — never presented as if it were fixed before
+Phase 7/8 ran.
+
+- **Question:** if a user excludes low-pLDDT residues before trusting
+  PeSTo's AlphaFold-input predictions, do precision/recall/F1 on the
+  *remaining* residues actually improve, and by how much of the true
+  interface does that cost?
+- **Primary analysis:** for both inputs (`exp`, `af_trimmed`) and each
+  pLDDT cutoff in `config.PLDDT_FILTER_CUTOFFS` (0, 50, 70, 90 — 0 is the
+  no-filtering baseline), keep only primary-set residues with
+  `plddt >= cutoff` (pLDDT is a property of the AlphaFold model, shared by
+  both inputs' rows in `per_residue_features.parquet` — not recomputed per
+  input), binarize each input's own continuous probability at a **fixed**
+  threshold (`config.PLDDT_FILTER_PREDICTION_THRESHOLD = 0.5`, chosen as
+  the natural midpoint, not tuned per input/cutoff to avoid picking each
+  curve's own best case), and compute precision, recall, and F1 on the
+  kept residues.
+- **Reference curve:** the identical sweep run on `exp` input (same
+  cutoffs, same residues kept per cutoff, same fixed threshold). Since
+  pLDDT is a property of the chain/AlphaFold model, not of which input is
+  being scored, running the same cutoff on `exp` isolates whatever
+  precision/recall/F1 change is specifically attributable to
+  `af_trimmed`'s pLDDT-linked error (Section 3.2) from the generic effect
+  of discarding hard-to-predict low-confidence residues (which could
+  improve either curve for reasons unrelated to AlphaFold's structural
+  error, e.g. low-pLDDT regions being disordered loops that are
+  intrinsically harder to classify regardless of input).
+- **Cost side, reported alongside every cutoff, never omitted:** the
+  fraction of all scored residues discarded, and the fraction of *true*
+  interface residues discarded — discarding flexible loops has a real
+  cost, since many genuine interfaces sit exactly there (PLAN.md
+  Introduction/confound rationale).
+- **Bootstrap:** chain-resampled 95% CIs for precision/recall/F1 at each
+  (input, cutoff) pair, same method as Phase 7/8
+  (`config.PHASE8_BAND_BOOTSTRAP_N_RESAMPLES`, `config.PHASE8_BOOTSTRAP_SEED`
+  — reused rather than a third redundant bootstrap-constant pair, since
+  this is the same "pooled metric over tens of thousands of residues"
+  cost profile as Phase 8's band metrics, not Phase 7's cheap per-chain
+  scalar bootstrap). A resample where a cutoff+input combination yields
+  zero predicted positives (precision undefined) or zero true positives
+  in the kept set (recall undefined) is logged and excluded from that
+  metric's CI, not silently treated as 0 or 1.
+- **Outputs:** `results/error_analysis/plddt_filtering.csv` (one row per
+  input x cutoff: n_residues, frac_residues_kept, n_positives,
+  frac_positives_kept, precision/recall/f1 with CIs, n_bootstrap_undefined
+  per metric), figure `results/figures/error_analysis_plddt_filtering.png`
+  (F1 vs. cutoff for both inputs; fraction of all residues vs. fraction of
+  true-interface residues discarded vs. cutoff).
+- **src module:** `src/analysis/plddt_filtering.py`, reading
+  `results/error_analysis/per_residue_features.parquet` (already has
+  `plddt`, `is_interface_contact`, `exp_prob`, `af_trimmed_prob`,
+  `pdb_id`, `chain_id` — no new joins needed).
+- **Tests:** `tests/test_plddt_filtering.py` (no network, synthetic data):
+  precision/recall/F1 computed correctly at a known threshold; cutoff=0
+  keeps every residue; a cutoff above every residue's pLDDT keeps zero and
+  is reported as such, not silently dropped from the output table;
+  bootstrap resamples chains (same discrete-outcome test pattern as
+  Phase 8's own bootstrap tests); undefined-metric draws (all-negative or
+  all-non-interface resample) are counted, not treated as 0.
+- **How this changes the paper:** a new Results subsection (3.3) reports
+  the measured numbers in place of the prior unqualified "actionable
+  finding" language, and the Discussion is revised to cite them instead of
+  asserting the implication. If filtering turns out not to help much at a
+  fixed threshold, that is reported plainly, not reframed.
+
+### Phase 8b — pLDDT-filtering deployment check — **DONE, post-hoc/exploratory** (2026-09-18)
+
+Implemented exactly the post-hoc plan above. Code: `src/analysis/plddt_filtering.py`
+(run as `.venv/bin/python -m src.analysis.plddt_filtering`), tests in
+`tests/test_plddt_filtering.py` (9 tests, synthetic data only); full suite
+170/170 passing. Runtime: ~4.5s on the primary set's 95,118 pooled residues.
+
+**Result: naive pLDDT filtering at a fixed 0.5 threshold does not
+meaningfully close the experimental-vs-AlphaFold gap, and the finding this
+session's brief anticipated ("if filtering turns out not to help much, say
+so plainly") is exactly what happened.**
+
+| Input | Cutoff | % residues kept | % true interface kept | Precision (95% CI) | Recall (95% CI) | F1 (95% CI) |
+|---|---|---|---|---|---|---|
+| Experimental | 0 | 100.0 | 100.0 | 0.730 [0.706, 0.752] | 0.580 [0.549, 0.611] | 0.647 [0.623, 0.669] |
+| AlphaFold trimmed | 0 | 100.0 | 100.0 | 0.673 [0.646, 0.700] | 0.535 [0.505, 0.567] | 0.596 [0.571, 0.621] |
+| Experimental | 50 | 97.0 | 94.7 | 0.726 [0.703, 0.750] | 0.573 [0.543, 0.605] | 0.640 [0.616, 0.664] |
+| AlphaFold trimmed | 50 | 97.0 | 94.7 | 0.687 [0.661, 0.711] | 0.529 [0.500, 0.563] | 0.598 [0.573, 0.624] |
+| Experimental | 70 | 91.0 | 85.7 | 0.726 [0.701, 0.750] | 0.566 [0.535, 0.600] | 0.636 [0.610, 0.661] |
+| AlphaFold trimmed | 70 | 91.0 | 85.7 | 0.693 [0.667, 0.718] | 0.525 [0.492, 0.559] | 0.598 [0.569, 0.625] |
+| Experimental | 90 | 66.0 | 57.0 | 0.737 [0.707, 0.765] | 0.556 [0.517, 0.594] | 0.634 [0.603, 0.662] |
+| AlphaFold trimmed | 90 | 66.0 | 57.0 | 0.713 [0.682, 0.743] | 0.523 [0.487, 0.560] | 0.603 [0.573, 0.633] |
+
+Zero undefined bootstrap draws for any (input, cutoff, metric) combination.
+
+**Reading it plainly:** going from no filtering to the strictest cutoff
+(pLDDT >= 90) moves AlphaFold-input F1 by only **+0.007** (0.596 -> 0.603),
+with heavily overlapping 95% CIs -- not distinguishable from no
+improvement -- while discarding **34% of all residues and 43% of the true
+interface residues**. The gap to experimental input's F1 narrows only from
+0.050 to 0.031, and part of even that narrowing is experimental input's
+own F1 drifting down (0.647 -> 0.634) as its harder low-pLDDT residues are
+discarded too, not AlphaFold input distinctly "catching up." The
+composition of AlphaFold input's small gain is also informative: precision
+rises materially (0.673 -> 0.713) while recall is essentially flat
+(0.535 -> 0.523) -- filtering trades real coverage of the true interface
+for a modest, not-clearly-significant precision gain, not a broad quality
+improvement.
+
+**This directly corrects an overreaching claim in the Phase 8 write-up's
+Discussion** (audited 2026-09-18, see "Decisions already made" below): the
+prior text called pLDDT "the most actionable finding here" and "a
+practical... confidence signal for flagging low-reliability regions,"
+without ever testing a filtering rule. That language has been replaced
+throughout `paper/template.tex` with the measured numbers above. pLDDT
+remains a genuine, independent statistical correlate of prediction shift
+(Phase 8's regression, Section 3.2) -- that is a real but more modest
+finding than a validated deployment filter, and this project no longer
+claims the latter.
+
+**Anything surprising:** the size of the disconnect between the pooled
+per-band AUPR gap (Phase 8's own headline number, a >6x shrinkage from
+lowest to highest pLDDT band) and the near-flat F1-at-fixed-threshold
+result here. AUPR/ROC-AUC are threshold-free ranking metrics and pLDDT
+banding pools by AlphaFold's own confidence, so the >6x band-level shrink
+is real -- but it does not imply that simply cutting off low-confidence
+residues at a single fixed operating threshold recovers similarly large
+practical gains, since discarding residues costs recall/coverage that a
+ranking metric doesn't have to pay for. The two findings are not in
+tension; they just answer different questions ("does confidence track
+where AUPR/ROC-AUC are worse" vs. "does thresholding on confidence improve
+a fixed-threshold classifier's F1"), and conflating them is exactly the
+overreach this phase was added to catch.
+
+**Deferred, not attempted here:** a per-input-optimized threshold (rather
+than the fixed 0.5), and any non-hard-cutoff use of pLDDT (e.g. a learned
+pLDDT-aware model per Phase 9) -- both noted in the paper's Future Work as
+open questions this result does not resolve either way.
+
 ### Phase 8 — Error analysis (original sketch, superseded)
 
 **Superseded for this pass by the pre-registered analysis plan above and

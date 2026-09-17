@@ -6,7 +6,7 @@ it whenever you finish a chunk of work or make a decision that changes the
 plan. `PLAN.md` is the design document (10 phases, confounds, deviations);
 this file tracks execution against it.
 
-Last updated: 2026-09-17.
+Last updated: 2026-09-18.
 
 ## Where things stand
 
@@ -79,6 +79,53 @@ by the drop distribution's right-skew (mean 0.061, well above the
 median), not by longer chains dropping more. See "Completed phases" for
 the full band/regression/length/flagged-chain numbers.
 
+**The results paper (`paper/results_paper.pdf`, built by `paper/build_paper.py`)
+was written this session (2026-09-18) and then adversarially audited against
+the data in the same session.** The audit found and fixed: (1) an internal
+terminology inconsistency where both the 696-representative leakage-free
+candidate set and the 566-chain final analyzed set were called "the primary
+benchmark set" -- now "leakage-free candidate set" (696) vs. "primary
+benchmark set" (566) throughout, abstract included; (2) a real
+mischaracterization of `MIN_CHAIN_LENGTH` (Phase 1) as "modeled residues"
+in both `config.py`'s own comment and the paper -- it's actually
+`entity_poly.rcsb_sample_sequence_length`, the polymer entity's full
+expressed/construct sequence length, which differs from the number of
+residues actually resolved in the deposited coordinates for 86% of Phase-1
+candidates (extreme case: PDB 7F90 chain B, 1,817-residue entity sequence
+vs. 45 residues actually observed) -- both fixed to describe it accurately;
+(3) the 95,118-vs-95,117 pooled-residue-count mismatch between Phase 7's
+benchmark and Phase 8's regression, traced to one specific residue (PDB
+35WD chain A, auth residue 1, chemical component ZI0) whose RSA is
+undefined because it isn't a standard amino acid per gemmi's CCD -- this
+was already being dropped for a legitimate reason but was never logged;
+`src/data/interface_labels.py` now logs it (and every other such residue
+project-wide: 44/528,351 labeled residues across all leakage modes) both
+per-occurrence and as a run-summary count, and the paper now explains the
+1-residue gap inline; (4) overreaching causal/actionable language in the
+Phase 8 write-up's Discussion, replaced by Phase 8b's actual measured
+numbers (see below); (5) two reproducibility-documentation bugs in
+`README.md` -- the documented Phase 1 command used the `--max-entries 500`
+pilot flag instead of the uncapped full-scale invocation that actually
+produced this project's numbers, and the documented phase sequence omitted
+`scripts/validate_mapping_geometry.py`, which is not actually optional
+(`src/analysis/benchmark.py` reads its `phase4_geometric_validation.csv`
+output directly for the "geometrically flagged" stratum, and
+`error_analysis.py` depends on it transitively) -- both fixed, and the
+full reproduction sequence now annotates every step with network
+requirements and measured runtime. **Phase 8b (pLDDT-filtering deployment
+check) was added as a new post-hoc, exploratory phase** to directly test
+the Phase 8 Discussion's informal "actionable" claim rather than leave it
+asserted: naive pLDDT filtering at a fixed 0.5 threshold does **not**
+meaningfully close the experimental-vs-AlphaFold gap (AlphaFold-input F1
+improves by only +0.007 from no filtering to the strictest cutoff, well
+within overlapping CIs, while discarding 43% of true interface residues)
+-- reported plainly as a limited/non-result rather than reframed, per this
+session's explicit instruction. See "Completed phases" for the full
+Phase 8b table and reasoning, and `PLAN.md`'s Phase 8b section for the
+post-hoc pre-registration (written before these specific numbers, but
+after Phase 7/8's results were already known -- explicitly not a true a
+priori pre-registration, and labeled as such everywhere it's mentioned).
+
 The earlier 500-entry pilot run (Phase 1 + Phase 2) is preserved at
 `data/interim/pilot_500/` for before/after comparison, not overwritten.
 The pilot's leakage-sweep shortfall (primary mode well under
@@ -87,12 +134,13 @@ artifact, not a structural problem -- the full-scale run clears both
 `MIN_TEST_CHAINS_TARGET` and `MIN_TEST_CHAINS_FLOOR` at every swept
 threshold.
 
-**Phase 1 and Phase 2's first-run code/outputs were committed and pushed**
-to `https://github.com/Menrae/ppi-interface-transfer.git` (`main`, commits
-`bd28a1b` and `f7b5c81`). **This session's changes (full-scale rerun code +
-outputs) are not yet committed** — confirm with the user before
-committing/pushing, per their standing preference to review first; don't
-assume a green light carries over between sessions.
+**Phases 1-8, the results paper, and Phase 8b were committed and pushed**
+to `https://github.com/Menrae/ppi-interface-transfer.git` (`main`) across
+several commits through `869eaf7` ("Add results paper..."). **This
+session's changes (the audit fixes above, Phase 8b, and the rebuilt paper)
+are not yet committed** — confirm with the user before committing/pushing,
+per their standing preference to review first; don't assume a green light
+carries over between sessions.
 
 ## What exists on disk right now
 
@@ -293,6 +341,31 @@ assume a green light carries over between sessions.
 - `logs/error_analysis.log` — full DEBUG log of the Phase 8 run (zero
   `WARNING` lines — no missing Cα/pLDDT residues, no undersized bands, no
   empty bootstrap groups).
+- `src/analysis/plddt_filtering.py` — Phase 8b implementation (post-hoc,
+  exploratory; see "Completed phases" below), runnable as
+  `.venv/bin/python -m src.analysis.plddt_filtering`.
+  `tests/test_plddt_filtering.py` (9 tests, synthetic data only). New
+  `config.py` constants: `PLDDT_FILTER_PREDICTION_THRESHOLD=0.5`,
+  `PLDDT_FILTER_CUTOFFS=(0,50,70,90)`.
+- `results/error_analysis/plddt_filtering.csv`,
+  `results/figures/error_analysis_plddt_filtering.png` — **new, Phase 8b**
+  outputs, see "Completed phases" below for the numbers.
+- `logs/plddt_filtering.log` — full DEBUG log of the Phase 8b run.
+- `paper/build_paper.py`, `paper/template.tex` — regenerates
+  `paper/results_paper.pdf` (and `paper/results_paper.tex`,
+  `paper/figures/fig{1..7}_*`) end to end from `results/` and
+  `data/interim/` in one command
+  (`.venv/bin/python paper/build_paper.py`); no number in the paper is
+  hand-typed. See README.md's "Building the results paper" section for
+  the PDF route (`pdflatex`) and the structure-figure fallback
+  (matplotlib Calpha trace, since no headless 3D molecular renderer could
+  be installed in this container -- `pymol`/`pymol-open-source` aren't on
+  PyPI, `pyvista`/VTK segfaults with no X/EGL/OSMesa and no root access).
+  `paper/figures/example_chain_render.png`, if a real render is ever
+  dropped in there, overrides the matplotlib fallback automatically (no
+  code change needed) -- see README.md for exactly what it should show.
+  9 pages as of this session's audit rebuild (2026-09-18), 7 figures, 4
+  tables.
 - Empty scaffold directories: `notebooks/` (`data/processed` and
   `results/` are now both populated, see above; PeSTo's model repo itself
   is checked out too, see above).
@@ -559,6 +632,49 @@ assume a green light carries over between sessions.
   top-level `src/<name>/` package ever collides with a root-level ignored
   dir name again, check `git check-ignore -v <path>` before assuming
   `git status` is complete — it can be silently empty.
+- **`MIN_CHAIN_LENGTH` (Phase 1) is a filter on `entity_poly.rcsb_sample_sequence_length`,
+  the polymer entity's full expressed/construct sequence length -- NOT the
+  count of residues actually resolved in the deposited coordinates,
+  despite `config.py`'s original comment (and this project's own paper,
+  before this session's audit) calling it "modeled residues."** Confirmed
+  on real data during this session's paper audit: 86% of Phase 1
+  candidates with a Phase 4 mapping have `seq_length != n_observed`, with
+  a large mean gap (~31 residues) and extreme cases (PDB 7F90 chain B:
+  1,817 vs. 45). Both `config.py`'s comment and every paper/doc reference
+  now say "entity sequence length," not "modeled residues." Don't
+  reintroduce the old phrasing -- it's not a synonym.
+- **`interface_labels.py`'s RSA is silently NaN (not dropped, not logged)
+  for any residue whose chemical component isn't a standard amino acid
+  per gemmi's CCD** (no Sander/Rost max-ASA reference value exists for
+  it) -- found during this session's paper audit while tracing why
+  Phase 7's pooled 95,118 residues became 95,117 in Phase 8's regression.
+  Fixed, not just documented: `compute_sasa_labels` now logs a WARNING
+  per occurrence (residue key + chemical component) and `run()` logs a
+  run-level summary count. Rerunning Phase 5 with this fix produces
+  byte-identical labeled-chain counts and pooled agreement statistics to
+  before (2,527/2,604 labeled, Jaccard 0.9047972508591066) -- confirmed
+  this is a pure logging addition, not a behavior change, so Phase 6/7/8
+  did not need to be rerun. Project-wide: 44/528,351 labeled residues
+  (across all leakage modes) have undefined RSA this way; in the primary
+  set specifically, exactly 1 (PDB 35WD chain A, auth residue 1, chemical
+  component ZI0), which is the residue Phase 8's regression drops.
+- **README.md's documented Phase 1 reproduction command was wrong** --
+  it used `--max-entries 500` (the pilot/smoke-test flag) where the
+  actual full-scale run that produced this project's committed
+  `candidates.csv` (22,887 chains, 8,808 entries) used no cap at all.
+  Fixed. Also added: `scripts/validate_mapping_geometry.py` is
+  **not optional** despite living in `scripts/` alongside genuinely
+  optional hand-verification tools -- `src/analysis/benchmark.py` reads
+  its `phase4_geometric_validation.csv` output directly for the
+  "geometrically flagged" stratum, and `src/analysis/error_analysis.py`
+  depends on it transitively through `benchmark.load_chain_metadata()`.
+  Confirmed by grepping every `src/` module for `INTERIM_DATA_DIR`/
+  `RESULTS_DIR` reads: this is the *only* script-produced (as opposed to
+  `src/`-pipeline-produced) file anything downstream depends on;
+  `phase5_spatial_verification.csv` and every `spot_check_*`/
+  `phase6_sanity_check.py` output is confirmed read by nothing else, so
+  those really are optional. README.md's reproduction section now states
+  this explicitly and annotates every step with network/runtime info.
 
 ## Completed phases
 
@@ -1289,19 +1405,85 @@ independent one). Full suite: 161/161 passing.
 apo/unbound arm (no unbound-structure local RMSD), `af_full`, and any
 leakage-sensitivity-mode analysis.
 
+### Phase 8b — pLDDT-filtering deployment check (post-hoc, exploratory)
+
+**Done (2026-09-18).** Added this session specifically to test a claim
+the Phase 8 write-up's Discussion made informally but never actually
+tested: that pLDDT is "actionable" for flagging unreliable AlphaFold-input
+predictions. Pre-registered in `PLAN.md` as post-hoc/exploratory (written
+before these numbers were computed, but after Phase 7/8's own results
+were already known -- explicitly not a true a priori pre-registration).
+`src/analysis/plddt_filtering.py`, runnable as
+`.venv/bin/python -m src.analysis.plddt_filtering`, ~4.5s runtime on the
+primary set's 95,118 pooled residues.
+
+**Result: filtering doesn't help much, and this is reported plainly rather
+than reframed.** At a fixed 0.5 probability threshold, sweeping the pLDDT
+cutoff from 0 to 90 moves AlphaFold-input F1 by only **+0.007** (0.596 ->
+0.603, heavily overlapping 95% CIs), while discarding **34% of all
+residues and 43% of the true interface residues**. The gap to experimental
+input's F1 narrows only from 0.050 to 0.031, and part of even that is
+experimental input's own F1 drifting down (0.647 -> 0.634) as its harder
+residues get discarded too -- not AlphaFold input distinctly "catching
+up." AlphaFold-input precision does rise materially (0.673 -> 0.713) while
+recall stays essentially flat (0.535 -> 0.523): filtering trades real
+interface coverage for a modest precision gain, not a broad quality
+improvement. Full table in `PLAN.md`'s Phase 8b write-up and
+`results/error_analysis/plddt_filtering.csv`.
+
+**This directly replaced overreaching language in the paper.** The Phase
+8 Discussion previously called pLDDT "the most actionable finding here"
+and described it as "a practical... confidence signal for flagging
+low-reliability regions" without ever testing a filtering rule --
+`paper/template.tex` now cites Phase 8b's actual measured numbers instead,
+and a new Results subsection (3.3) and figure (F1-vs-cutoff plus a
+cost-of-filtering panel) report the full result.
+
+**Tests:** `tests/test_plddt_filtering.py` (9 tests, synthetic data only)
+-- precision/recall/F1 correctness at known thresholds; cutoff=0 keeps
+everything; a cutoff above every residue's pLDDT keeps zero and is
+reported as a row, not dropped; higher cutoffs never increase the kept
+fraction; a perfect predictor scores perfectly regardless of cutoff;
+chain-resampled bootstrap demonstrated at chain granularity (same
+discrete-outcome pattern as Phase 8's own bootstrap tests). Full suite:
+170/170 passing.
+
+**Anything surprising:** the disconnect between Phase 8's own headline
+pooled-AUPR-by-band result (>6x gap shrinkage from lowest to highest
+pLDDT band) and this near-flat fixed-threshold F1 result. Both are
+correct; they answer different questions (a threshold-free ranking metric
+pooled by confidence band, vs. a fixed-threshold classifier's F1 after
+discarding low-confidence residues), and conflating the two is exactly
+the overreach this phase exists to catch.
+
 ## Next step
 
-Phases 1-8 (lean scope) are done. **Phase 9 is explicitly out of scope
+Phases 1-8 (lean scope), Phase 8b, and the results paper (with this
+session's audit fixes) are all done. **Phase 9 is explicitly out of scope
 for this lean pass** (see the lean-scope decision and Phase 8's gate note
 above) -- both its gate conditions are now met, but that doesn't reopen
-the question; don't start it without a new explicit instruction. Deferred
-items that would need to happen first if this project ever goes beyond
-the lean scope: the ~250-chain seeded subsamples for the
+the question; don't start it without a new explicit instruction. Phase
+8b's own result (naive pLDDT filtering doesn't help much at a fixed
+threshold) does not change this -- Phase 9 as scoped is a *learned*
+pLDDT-aware fine-tune, not a hard filter, and Phase 8b's finding is framed
+in the paper as leaving that question open, not resolving it either way.
+Deferred items that would need to happen first if this project ever goes
+beyond the lean scope: the ~250-chain seeded subsamples for the
 `exact_train`/`none` leakage-sensitivity modes (needs its own Phase 6
 inference run -- only the primary set has predictions so far), any
 `af_full`/apo-arm comparison, and (for Phase 8 specifically) the
 apo/unbound arm's own local RMSD. Phase 10 (report generation) has not
-been started.
+been formally started, though the results paper now covers most of what
+it would produce.
+
+**The results paper's structure figure (Fig. 6) still uses the matplotlib
+Calpha-trace fallback**, not a real molecular render -- no headless 3D
+renderer could be installed in this container (see "Decisions already
+made" / README.md). `paper/build_paper.py` will automatically pick up
+`paper/figures/example_chain_render.png` if it's ever dropped in from
+outside this environment; no code change needed, see README.md's
+"Substituting a rendered structure figure" for exactly what it should
+show.
 
 Open question #3 from `PLAN.md` Sec. 5 is now fully resolved for this
 project's purposes: Phase 7's own primary-endpoint alpha (0.05) is fixed

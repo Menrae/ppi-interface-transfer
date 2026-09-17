@@ -406,12 +406,18 @@ def _build_atom_array(atoms: list) -> AtomArray:
     return arr
 
 
-def compute_sasa_labels(residues: dict, ordered_keys: list, partner_atoms: list) -> dict:
+def compute_sasa_labels(residues: dict, ordered_keys: list, partner_atoms: list, pdb_id: str, chain_id: str) -> dict:
     """{key: (delta_sasa, is_interface_sasa, rsa)} using biotite's
     Shrake-Rupley implementation (freesasa isn't installable in this
     container -- recorded risk, PLAN.md Sec 6), isolated vs. in the
     assembly context (representative + protein partners only, no
     ligands/waters -- consistent with the distance label's partner set).
+
+    rsa is NaN (logged, not silently produced) when the residue's chemical
+    component doesn't resolve to one of the 20 standard amino acids via
+    gemmi's CCD (e.g. a non-canonical residue lacking a Sander/Rost max-ASA
+    reference value) -- delta_sasa/is_interface_sasa are unaffected, only
+    the RSA denominator is undefined.
     """
     rep_atom_lists = [residues[k].atoms for k in ordered_keys]
     rep_atom_counts = [len(a) for a in rep_atom_lists]
@@ -437,6 +443,13 @@ def compute_sasa_labels(residues: dict, ordered_keys: list, partner_atoms: list)
         delta = residue_isolated - residue_complex
         letter = one_letter_code(residues[key].comp_id)
         max_sasa = MAX_SASA_ANGSTROM2.get(letter) if letter else None
+        if max_sasa is None:
+            logger.warning(
+                "%s_%s: residue %s (%s) has no RSA reference value (not a standard amino "
+                "acid per gemmi's CCD) -- rsa=NaN for this residue, delta_sasa/distance "
+                "labels unaffected",
+                pdb_id, chain_id, key, residues[key].comp_id,
+            )
         rsa = (residue_isolated / max_sasa) if max_sasa else float("nan")
         result[key] = (delta, delta > config.SASA_BURIAL_CUTOFF_ANGSTROM2, rsa)
         offset += n_atoms
@@ -509,7 +522,7 @@ def process_representative(pdb_cif_path: Path, pdb_id: str, chain_id: str, phase
 
         distance_labels = compute_distance_labels(residues, partners["partner_atoms"])
         ordered_keys = sorted(residues)
-        sasa_labels = compute_sasa_labels(residues, ordered_keys, partners["partner_atoms"])
+        sasa_labels = compute_sasa_labels(residues, ordered_keys, partners["partner_atoms"], pdb_id, chain_id)
 
         n_interface_distance = sum(1 for k in ordered_keys if distance_labels[k][1])
         if n_interface_distance == 0:
@@ -677,6 +690,8 @@ def run() -> None:
     report_rows = []
     all_distance_flags: list[bool] = []
     all_sasa_flags: list[bool] = []
+    n_rsa_undefined = 0
+    n_residues_labeled = 0
     for i, rep in enumerate(rows):
         parquet_path = RESIDUE_MAPS_DIR / f"{rep['pdb_id']}_{rep['chain_id']}.parquet"
         pdb_cif_path = config.RAW_DATA_DIR / "pdb" / f"{rep['pdb_id']}_updated.cif.gz"
@@ -705,6 +720,8 @@ def run() -> None:
             write_parquet(parquet_rows, INTERFACE_LABELS_DIR / f"{rep['pdb_id']}_{rep['chain_id']}.parquet")
             all_distance_flags.extend(r["is_interface_contact"] for r in parquet_rows)
             all_sasa_flags.extend(r["is_interface_sasa"] for r in parquet_rows)
+            n_residues_labeled += len(parquet_rows)
+            n_rsa_undefined += sum(1 for r in parquet_rows if r["rsa"] != r["rsa"])  # NaN != NaN
 
         if (i + 1) % 250 == 0 or (i + 1) == len(rows):
             n_labeled_so_far = sum(1 for r in report_rows if r["status"] == "labeled")
@@ -739,6 +756,13 @@ def run() -> None:
         "Asymmetric-unit sanity comparison: %d/%d representatives would have zero protein "
         "partners if the assembly were the ASU instead of the chosen biological assembly",
         n_would_exclude_asu, len(report_rows),
+    )
+
+    logger.info(
+        "RSA undefined (non-standard residue, no Sander/Rost reference value) for %d/%d "
+        "labeled residues -- kept in output with rsa=NaN, not dropped; see per-residue "
+        "WARNING lines above for which residues",
+        n_rsa_undefined, n_residues_labeled,
     )
 
 

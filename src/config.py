@@ -48,11 +48,17 @@ INTERFACE_DISTANCE_CUTOFF_ANGSTROM = 5.0
 # entities, inclusive.
 MAX_PROTEIN_ENTITIES = 10
 
-# Minimum modeled residues (entity_poly.rcsb_sample_sequence_length) for a
-# chain to be considered a foldable domain rather than a peptide fragment.
-# Comparable in spirit to PeSTo's own training filter (min_num_res=48 in
-# their model/config.py); kept slightly more permissive here since this is
-# candidate *selection*, not PeSTo's own training set.
+# Minimum entity sequence length (entity_poly.rcsb_sample_sequence_length)
+# for a chain to be considered a foldable domain rather than a peptide
+# fragment. This is the polymer entity's full expressed/construct sequence
+# length, NOT the number of residues actually resolved/modeled in the
+# deposited coordinates -- confirmed on real data that these differ
+# substantially and often (86% of Phase 1 candidates with a Phase 4 mapping
+# have a different value; extreme case 7F90 chain B: 1,817-residue entity
+# sequence vs. 45 residues actually observed). Comparable in spirit to
+# PeSTo's own training filter (min_num_res=48 in their model/config.py);
+# kept slightly more permissive here since this is candidate *selection*,
+# not PeSTo's own training set.
 MIN_CHAIN_LENGTH = 40
 
 # Maximum pairwise sequence identity allowed between train and test
@@ -255,3 +261,19 @@ PHASE8_BOOTSTRAP_SEED = 0
 # still gives a stable percentile CI at this n and keeps the full Phase 8
 # run well under that.
 PHASE8_BAND_BOOTSTRAP_N_RESAMPLES = 2_000
+
+# --- Phase 8b: pLDDT-filtering post-hoc analysis (NOT pre-registered before
+# Phase 7/8 were run -- see PLAN.md's post-hoc pre-registration note) ------
+
+# Fixed probability threshold for turning PeSTo's continuous interface
+# probability into a binary interface/non-interface call, used only for
+# this precision/recall/F1 analysis (AUPR/ROC-AUC elsewhere are threshold-
+# free). 0.5 is the natural midpoint of a probability output and is not
+# tuned per input/cutoff -- deliberately a simple, fixed, un-optimized
+# choice rather than each curve's own best operating point.
+PLDDT_FILTER_PREDICTION_THRESHOLD = 0.5
+
+# pLDDT cutoffs swept for the filtering analysis: keep only residues with
+# pLDDT >= cutoff. 0 (keep everything, the no-filtering baseline) plus
+# AlphaFold's own three confidence-band edges (PLDDT_BANDS).
+PLDDT_FILTER_CUTOFFS = (0,) + PLDDT_BANDS
