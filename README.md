@@ -138,7 +138,7 @@ summary of *why* each phase is designed the way it is.
 
 ## 5. Current status
 
-*Last updated: 2026-09-18. See [`PROGRESS.md`](PROGRESS.md) for the
+*Last updated: 2026-09-17. See [`PROGRESS.md`](PROGRESS.md) for the
 detailed, actively-maintained log this section is drawn from.*
 
 - ✅ **Phase 1 — Candidate selection**: done, run at full scale against the
@@ -251,8 +251,41 @@ detailed, actively-maintained log this section is drawn from.*
   not a data problem). Full numbers, figures, and the strata breakdown are
   in `results/benchmark/` and `results/figures/`, and described further in
   `PROGRESS.md` and `PLAN.md`.
-- ⬜ Phases 8–10 — not yet started (do not start without confirming the
-  Phase 7 result above first).
+- ✅ **Phase 8 — Error analysis**: done, same lean scope (566 primary-set
+  chains). This phase asks *why* AlphaFold inputs are less accurate: is it
+  associated with AlphaFold's own confidence score (pLDDT) and with how
+  much the AlphaFold model's 3D structure actually differs from the real
+  one nearby each residue? As before, the exact analyses were written down
+  and committed to in `PLAN.md` before any of them were run.
+  **Headline finding:** yes — the accuracy gap between real and AlphaFold
+  structures shrinks steadily as AlphaFold's own confidence increases,
+  from a large gap in AlphaFold's least-confident regions to a small one
+  in its most-confident regions (more than a 6x reduction end to end). A
+  statistical model confirms that both AlphaFold's confidence score and
+  local structural divergence are each independently linked to how much a
+  prediction shifts between the two inputs, after accounting for the
+  other and for how exposed the residue is. All results here describe
+  associations, not proven causes. One pre-registered guess turned out to
+  be wrong, and is reported as such rather than quietly dropped: whether
+  longer protein chains show a bigger accuracy drop — they don't
+  (essentially no relationship); the reason Phase 7's "typical per-chain"
+  number (0.03) looked smaller than its "everything pooled together"
+  number (0.07) turned out to be that a minority of chains have an
+  unusually large drop and skew the average upward, not that long chains
+  are systematically worse. A side comparison also confirmed that the 92
+  chains flagged earlier (Phase 4) for unusual 3D disagreement with
+  AlphaFold really are a distinct group: lower AlphaFold confidence, much
+  larger structural divergence, and a bigger accuracy drop than the rest.
+  Full numbers and figures are in `results/error_analysis/` and
+  `results/figures/`, and described further in `PROGRESS.md` and
+  `PLAN.md`.
+- ⬜ Phase 9 (pLDDT-augmented fine-tuning) — both of its pre-registered
+  gate conditions are now satisfied (Phase 7 found a significant gap, and
+  Phase 8 tied it to AlphaFold's confidence score), but this project is
+  deliberately not attempting Phase 9 this pass regardless, per the lean
+  scope decided at Phase 6 — it remains documented future work, not
+  something currently planned. Phase 10 (report generation) is also not
+  yet started.
 
 ## 6. Repository layout
 
@@ -332,6 +365,11 @@ sequence-identity cutoffs, etc.) are centralized in `src/config.py` — see
 # (writes results/benchmark/{per_chain_metrics,summary,strata,exclusions}.csv,
 # results/figures/*.png)
 .venv/bin/python -m src.analysis.benchmark
+
+# Phase 8: error analysis (primary set, lean scope) -- pLDDT bands, local
+# RMSD, RSA, secondary structure vs. prediction shift
+# (writes results/error_analysis/*.csv + *.parquet, results/figures/error_analysis_*.png)
+.venv/bin/python -m src.analysis.error_analysis
 ```
 
 All download-based commands (Phases 1-3) cache every downloaded file

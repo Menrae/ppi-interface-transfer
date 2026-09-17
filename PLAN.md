@@ -1099,7 +1099,297 @@ historical record.
   `unbound_coverage.json`) are reported with their own (likely much smaller)
   n, separately, and are not required to clear any size threshold.
 
-### Phase 8 — Error analysis
+### Phase 8 analysis plan (pre-registered 2026-09-17, before any structural
+feature was computed)
+
+Scope this pass: primary set only (the 566 Phase-7-benchmarked chains),
+`exp` vs. `af_trimmed` (per the lean-scope decision above; no apo/unbound
+arm, no `af_full`). Committed to below *before* running
+`src/analysis/structural_metrics.py` or `src/analysis/error_analysis.py`
+against real predictions.
+
+- **Primary question:** is the per-residue change in PeSTo predictions
+  between `exp` and `af_trimmed` associated with local structural
+  divergence and AlphaFold confidence? (Association, not causation — see
+  below.)
+- **Primary analysis:** per-residue ROC-AUC and AUPR of `af_trimmed`
+  predictions within pLDDT bands (`config.PLDDT_BANDS` = 50/70/90, giving
+  four bands: `<50`, `50-70`, `70-90`, `>=90`), alongside `exp`
+  predictions on the *same* residues (same band membership, defined by
+  AlphaFold's own confidence, not by which input is being scored) — this
+  isolates whether AlphaFold's own confidence signal predicts *where*
+  degradation concentrates. Chain-resampled bootstrap CIs (same
+  methodology as Phase 7: resample chains with replacement, not residues,
+  percentile method), with a new fixed seed `config.PHASE8_BOOTSTRAP_SEED`.
+  **Resample count for this specific CI is `config.PHASE8_BAND_BOOTSTRAP_N_RESAMPLES`
+  (2,000), not Phase 7's 10,000** — profiled empirically before running on
+  real data: each draw here recomputes a pooled O(n log n) ROC-AUC/AUPR
+  over tens of thousands of residues (~0.02s/draw at 50,000 residues),
+  unlike Phase 7's bootstrap of a cheap ~500-value per-chain-median array,
+  so 10,000 draws across every band x input combination would cost
+  20-30 minutes; 2,000 still gives a stable percentile CI at this n. Every
+  other Phase 8 bootstrap (length-vs-drop correlation, flagged-chain
+  comparisons) resamples cheap per-chain scalars and uses the full
+  `config.BOOTSTRAP_N_RESAMPLES` (10,000), same as Phase 7. A band is
+  reported only if it has
+  `>= config.PLDDT_BAND_MIN_RESIDUES` (30) residues; empty/undersized
+  bands are logged, not silently skipped.
+- **Secondary analysis:** a regression of the per-residue absolute
+  probability shift `|p_af_trimmed - p_exp|` on pLDDT, local RMSD, RSA,
+  and secondary-structure class (categorical: helix/strand/coil, coil as
+  reference), with **cluster-robust (CRV1) standard errors, clustered by
+  chain** (`statsmodels` OLS, `cov_type="cluster"`) — chosen over a mixed
+  model for simplicity and because the question here is "are these
+  associations there at all, correctly accounting for within-chain
+  correlation," not "how much does the effect vary by chain," which is
+  what a random-effects/mixed model would additionally buy. Continuous
+  predictors (pLDDT, local RMSD, RSA) are z-scored before fitting so their
+  coefficients are directly standardized; secondary-structure dummies stay
+  0/1 (not standardized in the same sense — noted, not a gap). Variance
+  inflation factors (VIF) are reported for every predictor (pLDDT and
+  local RMSD are expected to correlate — both reflect the same underlying
+  AlphaFold-vs-experimental divergence — so collinearity here is expected,
+  not a bug); any predictor with VIF > `config.VIF_COLLINEARITY_THRESHOLD`
+  (5) is flagged in the output, not silently included as if uncorrelated.
+  Rows missing any regression predictor are dropped with a logged count
+  and reason, never silently.
+- **Descriptive analyses (associations, side-by-side, not additional
+  confirmatory hypothesis tests — same framing as Phase 7's strata):**
+  1. Whether the per-chain AUPR drop (`exp - af_trimmed`, from Phase 7's
+     `per_chain_metrics.csv`) grows with chain length (`n_observed` from
+     `labels_report.csv`) — Spearman correlation with a chain-resampled
+     bootstrap CI, a single-predictor OLS slope, and a length-quartile
+     table (n, mean/median drop, mean length per quartile) — specifically
+     to explain the gap between Phase 7's per-chain **median** drop
+     (+0.027) and its **pooled**-residue drop (AUPR 0.739 → 0.669, i.e.
+     0.070): pooled metrics implicitly weight by chain length, so if drop
+     and length are positively associated, longer chains (which dominate
+     the pooled residue count) pull the pooled number above the
+     unweighted per-chain median.
+  2. What distinguishes the 92 chains Phase 4's geometric validation
+     flagged (`longest_far_run >= 5`, same rule as Phase 7's
+     `geometric_validation` stratum) from the 462 unflagged chains in the
+     same primary set: per-chain mean pLDDT, mean local RMSD, mean global
+     Cα distance, chain length, interface fraction, and AUPR drop,
+     reported side by side (n, mean, median per group) with a two-sided
+     Mann-Whitney U p-value per metric as descriptive context (same
+     precedent as Phase 7 reporting p-values on descriptive strata).
+- **All results — primary, secondary, and descriptive — are described as
+  associations, not as evidence that low pLDDT or high local RMSD
+  *causes* worse predictions.** This matters concretely for pLDDT and
+  local RMSD, which are expected to correlate (both track the same
+  underlying AlphaFold-vs-experimental divergence) — the regression
+  reports this via VIF rather than treating either coefficient as an
+  isolated causal effect.
+- **Local RMSD design (implemented in `structural_metrics.py`):** Cα RMSD
+  over mapped residues within `config.LOCAL_RMSD_RADIUS_ANGSTROM` (10 Å,
+  per this session's brief) of the residue in question, in the
+  *experimental* structure (neighborhood membership is defined by real
+  observed geometry, not AlphaFold's), with a **separate rigid-body
+  (Kabsch) superposition per residue's own neighborhood**, not one global
+  chain-wide superposition. *Why local, not global:* Phase 4's own
+  geometric-validation addendum already found that a single global fit
+  both (a) can be dragged off by multi-domain hinge motion (two
+  individually well-fitting sub-domains that no single global rotation
+  can satisfy simultaneously), which would misattribute hinge motion to
+  "AlphaFold got this residue wrong," and (b) is exactly the mechanism the
+  92-chain geometric-validation flag was built to detect in the first
+  place — reusing it as Phase 8's *only* structural-divergence measure
+  would conflate "this specific residue's local geometry is off" with
+  "this chain has some global misfit somewhere." A per-residue local
+  refit isolates genuine local divergence from that confound. Residues
+  whose neighborhood has fewer than `config.LOCAL_RMSD_MIN_NEIGHBORS` (3
+  — the minimum for a non-degenerate 3D rigid-body fit) mapped residues
+  with resolvable Cα coordinates in both structures get `local_rmsd =
+  NaN`, logged with a reason, not dropped from the output table.
+  **The existing Phase 4 per-residue Cα distance (one global superposition
+  per chain, post-fit per-residue distance) is reused as a separate,
+  complementary *global* measure** — Phase 4's own script
+  (`scripts/validate_mapping_geometry.py`) only persisted chain-level
+  summary statistics (median/mean/max distance, `longest_far_run`), not
+  the per-residue distances themselves, so `structural_metrics.py`
+  recomputes them with the identical method (same Kabsch/SVD superposition
+  logic) rather than importing from a one-off, non-package `scripts/`
+  file — a deliberate small duplication, not a re-derivation of the
+  method.
+- **pLDDT source:** AlphaFold DB mmCIFs store per-residue pLDDT as
+  `_atom_site.B_iso_or_equiv` (i.e. gemmi's `atom.b_iso`) — confirmed by
+  direct inspection this session (not assumed): all atoms within one
+  residue carry the identical value (spot-checked), and the values fall
+  in AlphaFold's documented 0-100 pLDDT range, not a real crystallographic
+  B-factor. `structural_metrics.py` reads the CA atom's `b_iso` per
+  residue.
+- **Secondary structure source:** `mkdssp`/DSSP is confirmed **not
+  installed** in this container (no root access, per the recorded risk) —
+  `structural_metrics.py` uses `biotite.structure.annotate_sse` (P-SEA,
+  3-state: helix/strand/coil) on the experimental chain's Cα trace. If
+  `mkdssp` is ever installed later, this is the one place to switch.
+- **RSA source:** reused directly from Phase 5's already-computed
+  per-residue `rsa` column (`data/interim/interface_labels/*.parquet`) —
+  not recomputed.
+- **Deferred, not part of this pass** (per the lean-scope decision):
+  the apo/unbound arm (no unbound-structure local RMSD), `af_full`, and
+  any leakage-sensitivity-mode analysis (primary/`"homolog"` set only,
+  same as Phase 7).
+
+### Phase 8 — Error analysis — **DONE, lean scope** (2026-09-17)
+
+Implemented exactly the pre-registered plan above, no deviations. Code:
+`src/analysis/structural_metrics.py` (per-residue feature computation) +
+`src/analysis/error_analysis.py` (orchestration, run as
+`.venv/bin/python -m src.analysis.error_analysis`). Tests:
+`tests/test_structural_metrics.py` (11 tests, synthetic coordinates only)
++ `tests/test_error_analysis.py` (7 tests, synthetic data only); full
+suite 161/161 passing. `statsmodels==0.15.0` installed and added to
+`requirements.txt` (needed for cluster-robust OLS + VIF).
+
+**Run: all 566 primary-set chains, 95,118 pooled residues, wall-clock
+2m48s.** Zero chain-level exclusions (`results/error_analysis/structural_feature_exclusions.csv`
+is empty — every chain that had `exp`+`af_trimmed` predictions also had
+resolvable Calpha coordinates, pLDDT, and a secondary-structure assignment
+for effectively every residue) and zero warnings logged
+(`logs/error_analysis.log`) — Phase 4-7's residue bookkeeping held up
+again with no new join-level surprises. Secondary structure used
+`biotite.structure.annotate_sse` (P-SEA) for all 566 chains — `mkdssp`
+confirmed not installed, as expected. pLDDT confirmed read from
+`_atom_site.B_iso_or_equiv`.
+
+**Primary analysis — pLDDT-band metrics** (`results/error_analysis/band_metrics.csv`,
+figure `results/figures/error_analysis_band_metrics.png`; chain-resampled
+95% bootstrap CIs, `n=2,000` draws):
+
+| pLDDT band | n residues | n chains | exp AUPR | af_trimmed AUPR | AUPR gap | exp ROC-AUC | af_trimmed ROC-AUC | ROC-AUC gap |
+|---|---|---|---|---|---|---|---|---|
+| `<50` | 2,828 | 216 | 0.798 [0.734, 0.858] | 0.543 [0.406, 0.705] | **0.255** | 0.868 [0.836, 0.894] | 0.673 [0.602, 0.738] | **0.195** |
+| `50-70` | 5,735 | 445 | 0.766 [0.717, 0.810] | 0.649 [0.587, 0.707] | **0.117** | 0.843 [0.816, 0.867] | 0.768 [0.737, 0.797] | **0.075** |
+| `70-90` | 23,762 | 535 | 0.734 [0.699, 0.766] | 0.663 [0.623, 0.701] | **0.071** | 0.853 [0.836, 0.869] | 0.809 [0.790, 0.828] | **0.044** |
+| `>=90` | 62,793 | 493 | 0.730 [0.697, 0.761] | 0.690 [0.655, 0.724] | **0.040** | 0.893 [0.882, 0.904] | 0.871 [0.858, 0.885] | **0.022** |
+
+Every band cleared `PLDDT_BAND_MIN_RESIDUES` (30) with wide margin, zero
+undefined bootstrap draws in any band. **The AlphaFold-vs-experimental gap
+shrinks monotonically as AlphaFold's own confidence increases** — from a
+0.26 AUPR gap in the lowest-confidence band down to 0.04 in the
+highest-confidence band, a >6x reduction — directly answering the primary
+question: yes, AlphaFold's own pLDDT tracks where its structural error
+translates into worse PeSTo predictions. (Side observation, not
+pre-registered: the interface base rate also drops monotonically with
+pLDDT band — 0.40 → 0.33 → 0.26 → 0.19 — consistent with low-confidence
+regions disproportionately being flexible loops/termini, which are also
+disproportionately interface-labeled; noted, not investigated further.)
+
+**Secondary analysis — shift regression** (`results/error_analysis/regression.csv`;
+n=95,117 residues, 1 dropped for missing RSA, logged; 566 clusters;
+cluster-robust CRV1 SEs clustered by chain):
+
+| term | coef | cluster-robust SE | p | VIF |
+|---|---|---|---|---|
+| const | 0.102 | 0.0029 | <1e-270 | — |
+| `plddt_z` | **-0.0268** | 0.0033 | 3.9e-16 | 1.64 |
+| `local_rmsd_z` | **+0.0268** | 0.0044 | 1.4e-9 | 1.48 |
+| `rsa_z` | **+0.0254** | 0.0016 | 1.4e-57 | 1.18 |
+| `sse_a` (helix, vs. coil) | +0.0115 | 0.0035 | 9.8e-4 | 1.15 |
+| `sse_b` (strand, vs. coil) | +0.0073 | 0.0042 | 0.081 (n.s.) | 1.18 |
+
+All three continuous predictors are significantly associated with the
+absolute probability shift in the expected direction (higher pLDDT ->
+smaller shift; higher local RMSD and higher RSA -> larger shift), each
+controlling for the others. **No VIF exceeds `VIF_COLLINEARITY_THRESHOLD`
+(5)** — the largest is 1.64 (`plddt_z`) — so despite pLDDT and local RMSD
+being expected to correlate (both track AlphaFold-vs-experimental
+divergence), the actual collinearity here is mild; both retain
+independent, significant explanatory power, not just one proxying for the
+other. Helix residues show a small additional shift over coil; strand
+does not reach significance. As pre-registered, these are associations,
+not causal claims — pLDDT and local RMSD are two lenses on the same
+underlying divergence, and the regression doesn't establish which one, if
+either, is doing the "real" work.
+
+**Descriptive — chain length vs. AUPR drop** (`results/error_analysis/length_analysis.csv`,
+figure `results/figures/error_analysis_aupr_drop_vs_length.png`; n=554,
+same chains as Phase 7's primary endpoint): **no meaningful length
+association** — Spearman rho=0.028, 95% CI [-0.054, 0.108], p=0.51; OLS
+slope of drop on raw length ≈ -3.3e-6 per residue, p=0.96; length
+quartiles (mean lengths 51/99/176/363 residues) show median drops
+0.020/0.020/0.041/0.025 — not monotonic. **This contradicts the
+pre-registration's a priori hypothesis** (that pooled-vs-median gap was
+mainly a length-weighting effect) — stated plainly rather than
+reframed after the fact. What actually explains Phase 7's pooled AUPR
+drop (0.070, from pooled AUPR 0.739 -> 0.669) being larger than its
+per-chain **median** drop (0.027): the per-chain drop distribution is
+strongly **right-skewed** (unweighted mean 0.061, roughly 2.2x the
+median), and length-weighting the mean barely moves it (length-weighted
+mean 0.061, almost identical to the unweighted mean 0.061) — i.e. long
+chains are not systematically worse, so weighting by length isn't what's
+happening. The remaining gap between even the (weighted or unweighted)
+mean of ~0.061 and the pooled value of 0.070 is a reminder that pooled
+AUPR is **not a weighted average of per-chain AUPRs at all** — it's a
+single rank-based statistic over all residues combined, which can differ
+from any linear combination of the per-chain numbers. Net picture: a
+minority of chains with unusually large AlphaFold-vs-experimental
+degradation pull the mean well above the median, and pooling residues
+(rather than averaging per-chain metrics) departs from even that mean —
+chain length has nothing to do with it.
+
+**Descriptive — geometrically flagged vs. unflagged chains**
+(`results/error_analysis/flagged_chains_summary.csv`, figure
+`results/figures/error_analysis_flagged_vs_unflagged.png`; same 92
+flagged / 462 unflagged split as Phase 7's `geometric_validation`
+stratum, Mann-Whitney U, two-sided):
+
+| metric | flagged mean (median) | unflagged mean (median) | p |
+|---|---|---|---|
+| mean local RMSD (Å) | 2.21 (1.39) | 0.67 (0.55) | 4.2e-32 |
+| mean global Cα distance (Å) | 7.91 (7.37) | 1.40 (0.98) | 9.5e-40 |
+| mean pLDDT | 77.4 (84.1) | 87.9 (90.6) | 2.8e-11 |
+| chain length (residues) | 224 (202) | 162 (117) | 2.5e-4 |
+| per-chain AUPR drop | 0.108 (0.059) | 0.052 (0.024) | 0.02 |
+| interface fraction | 0.314 (0.215) | 0.327 (0.266) | 0.18 (n.s.) |
+
+The 92 flagged chains are a coherent, distinguishable population: lower
+AlphaFold confidence, much larger local *and* global structural
+divergence, longer on average, and a roughly 2x larger PeSTo AUPR drop —
+consistent with confound (c)/Phase 4's addendum finding that this flag
+catches genuine AlphaFold-vs-experimental 3D divergence (not a mapping
+artifact), and consistent with the band-metrics/regression results above.
+Interface fraction is the one metric that doesn't differ — being flagged
+isn't related to how much of the chain is interface.
+
+**Anything surprising:** the length-vs-drop null result (directly
+contradicting the pre-registration's stated hypothesis, see above) is the
+most notable finding of this phase — worth remembering if this dataset is
+revisited, since "longer chains degrade more" was a reasonable-sounding a
+priori guess that the data does not support; the actual explanation
+(right-skew + pooled-AUPR nonlinearity) is less intuitive but is what the
+data shows. Also notable: pLDDT and local RMSD turned out to be only
+mildly collinear (VIF 1.6, not the "expected" strong correlation the
+pre-registration flagged as a risk) — both retain independent signal in
+the regression, which wasn't guaranteed going in.
+
+**Deferred, not part of this pass** (per the lean-scope decision): the
+apo/unbound arm, `af_full`, and any leakage-sensitivity-mode analysis.
+**Phase 9 gate:** Phase 7's primary endpoint was significant (p ≈ 3.5e-17)
+and Phase 8's band metrics now do tie the gap to pLDDT (monotonic,
+>6x shrinkage from lowest to highest confidence band) — **both Phase 9
+gate conditions are met** for the first time this project. Per the
+lean-scope decision, **Phase 9 is still not attempted this pass
+regardless** — that decision was to skip Phase 9 entirely for this lean
+pass, not conditional on the gate; if Phase 9 is ever picked back up,
+this note is where to look to confirm the gate was already satisfied
+2026-09-17, not something to re-derive.
+
+### Phase 8 — Error analysis (original sketch, superseded)
+
+**Superseded for this pass by the pre-registered analysis plan above and
+the actual implementation below** — same precedent as Phases 3-7: this
+sketch predates Phase 6/7's real output paths/schemas and was never
+revised to match them (e.g. `results/metrics/`-style paths that don't
+exist; the real predictions live at
+`data/processed/predictions/{exp,af_trimmed}/` and labels at
+`data/interim/interface_labels/`), and it specified a logistic regression
+of a binary "prediction error" rather than the more informative continuous
+absolute-probability-shift regression this session's brief asks for.
+Kept below for the record, not as a target to implement literally.
+
 - **Inputs:** AlphaFold predictions/labels, AlphaFold mmCIF B-factor column
   (pLDDT), residue mappings, experimental (and unbound, where available)
   structures for local RMSD.

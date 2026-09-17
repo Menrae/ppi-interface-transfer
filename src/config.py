@@ -201,3 +201,57 @@ PHASE7_BOOTSTRAP_SEED = 0
 # plan) -- an even split of "less than half the chain is interface" vs.
 # "at least half," not independently re-derived from the data.
 INTERFACE_FRACTION_STRATUM_THRESHOLD = 0.5
+
+# --- Phase 8: error analysis -----------------------------------------------
+
+# Radius (Angstrom), in the experimental structure, defining a residue's
+# local neighborhood for src.analysis.structural_metrics's local-RMSD
+# feature: the set of mapped residues within this distance of a given
+# residue's Calpha, each neighborhood superposed (Kabsch) on its own rather
+# than reusing one whole-chain global fit. See PLAN.md Phase 8 analysis
+# plan for why local (not global) superposition is used.
+LOCAL_RMSD_RADIUS_ANGSTROM = 10.0
+
+# Minimum number of Calpha-resolvable mapped residues a local-RMSD
+# neighborhood must contain (including the residue itself) for the local
+# Kabsch fit to be attempted -- below this a 3D rigid-body superposition is
+# degenerate/underdetermined. Neighborhoods smaller than this get
+# local_rmsd = NaN with a logged reason, not a silently-unstable fit.
+LOCAL_RMSD_MIN_NEIGHBORS = 3
+
+# Minimum number of residues a pLDDT band (or any other binned subset) must
+# contain in src.analysis.error_analysis before its metrics are reported --
+# below this, the bin is logged as too small rather than silently reported
+# on a handful of residues. Matches the original Phase 8 sketch's success
+# criterion.
+PLDDT_BAND_MIN_RESIDUES = 30
+
+# Variance-inflation-factor threshold above which a Phase 8 regression
+# predictor is flagged as collinear in the output rather than silently
+# reported as if independent. 5 is a standard rule-of-thumb VIF cutoff in
+# the regression-diagnostics literature.
+VIF_COLLINEARITY_THRESHOLD = 5.0
+
+# Number of equal-sized chain-length quantile bins in Phase 8's
+# chain-length-vs-AUPR-drop descriptive table. 4 (quartiles) gives a
+# readable table without over-slicing the primary set's 554 scoreable
+# chains.
+LENGTH_ANALYSIS_N_QUANTILES = 4
+
+# Chain-resampled bootstrap settings for Phase 8 (same method as Phase 7's
+# BOOTSTRAP_N_RESAMPLES: resample chains, not residues, percentile CI). A
+# separate seed from PHASE7_BOOTSTRAP_SEED so Phase 8's own reproducibility
+# doesn't depend on Phase 7's call order.
+PHASE8_BOOTSTRAP_SEED = 0
+
+# Number of chain-resampled bootstrap draws for Phase 8's pLDDT-band pooled
+# ROC-AUC/AUPR CIs specifically -- smaller than BOOTSTRAP_N_RESAMPLES
+# (10,000, used for every other Phase 8 bootstrap, which resamples cheap
+# per-chain scalars). Each band-metric draw here has to recompute a pooled
+# O(n log n) ROC-AUC/AUPR over tens of thousands of pooled residues, not a
+# median of ~500 scalars -- profiled empirically at ~0.02s/draw for a
+# 50,000-residue band (both metrics), so 10,000 draws across every
+# band x input combination would take on the order of 20-30 minutes; 2,000
+# still gives a stable percentile CI at this n and keeps the full Phase 8
+# run well under that.
+PHASE8_BAND_BOOTSTRAP_N_RESAMPLES = 2_000

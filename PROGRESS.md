@@ -6,7 +6,7 @@ it whenever you finish a chunk of work or make a decision that changes the
 plan. `PLAN.md` is the design document (10 phases, confounds, deviations);
 this file tracks execution against it.
 
-Last updated: 2026-09-18.
+Last updated: 2026-09-17.
 
 ## Where things stand
 
@@ -56,8 +56,28 @@ paired median AUPR difference **+0.027**, 95% CI **[0.019, 0.035]**,
 Wilcoxon p ≈ 3.5e-17 — but the typical per-chain gap is modest (a few
 AUPR points), not dramatic; see "Completed phases" for the full numbers,
 all eight pre-registered strata, and the ΔSASA robustness check (which
-reproduces the same result). **Do not start Phase 8** (explicit
-instruction this session) — see "Next step" for what's pending.
+reproduces the same result). **Phase 8 (error analysis, primary set,
+lean scope) is now also done** (2026-09-17, explicit go-ahead this
+session) — pre-registered analysis plan committed to `PLAN.md` before any
+structural feature was computed, then implemented exactly as registered
+in `src/analysis/structural_metrics.py` + `src/analysis/error_analysis.py`.
+**Headline result: the AlphaFold-vs-experimental accuracy gap shrinks
+monotonically with AlphaFold's own confidence** — pooled AUPR gap 0.26 in
+the lowest pLDDT band (`<50`) down to 0.04 in the highest (`>=90`), a >6x
+reduction — and a per-residue regression confirms pLDDT and local
+structural divergence (local RMSD) are each independently associated with
+the size of the prediction shift (both significant, controlling for the
+other; VIF only 1.6, milder collinearity than expected). **Both Phase 9
+gate conditions (Phase 7 significance + Phase 8 pLDDT-band effect) are
+now met for the first time**, but Phase 9 remains out of scope for this
+lean pass regardless, per the standing lean-scope decision (not a
+re-opened question). One pre-registered hypothesis was **not** borne out:
+chain length has essentially no association with per-chain AUPR drop
+(Spearman rho=0.028, p=0.51) — the gap between Phase 7's pooled AUPR drop
+(0.070) and its per-chain median drop (0.027) turned out to be explained
+by the drop distribution's right-skew (mean 0.061, well above the
+median), not by longer chains dropping more. See "Completed phases" for
+the full band/regression/length/flagged-chain numbers.
 
 The earlier 500-entry pilot run (Phase 1 + Phase 2) is preserved at
 `data/interim/pilot_500/` for before/after comparison, not overwritten.
@@ -244,6 +264,35 @@ assume a green light carries over between sessions.
   pooled_pr_curve,pooled_roc_curve}.png` — **new, Phase 7**: benchmark
   outputs, see "Completed phases" below for the numbers.
 - `logs/benchmark.log` — full DEBUG log of the Phase 7 run.
+- `src/analysis/structural_metrics.py` — Phase 8 per-residue feature
+  computation (see "Completed phases" below): pLDDT (from the AlphaFold
+  mmCIF's `B_iso_or_equiv`), local RMSD (per-residue windowed
+  superposition), global Cα distance (whole-chain superposition, reusing
+  Phase 4's method), secondary structure (`biotite` P-SEA — `mkdssp`
+  confirmed not installed). `tests/test_structural_metrics.py` (11 tests,
+  synthetic coordinates only, no network/structure files).
+- `src/analysis/error_analysis.py` — Phase 8 orchestration (see
+  "Completed phases" below), runnable as
+  `.venv/bin/python -m src.analysis.error_analysis`. Reuses Phase 7's
+  `src.analysis.benchmark.load_all_chain_frames`/`build_chain_frame`
+  rather than re-deriving the join. `tests/test_error_analysis.py` (7
+  tests, synthetic data only). New `config.py` constants:
+  `LOCAL_RMSD_RADIUS_ANGSTROM=10.0`, `LOCAL_RMSD_MIN_NEIGHBORS=3`,
+  `PLDDT_BAND_MIN_RESIDUES=30`, `VIF_COLLINEARITY_THRESHOLD=5.0`,
+  `LENGTH_ANALYSIS_N_QUANTILES=4`, `PHASE8_BOOTSTRAP_SEED=0`,
+  `PHASE8_BAND_BOOTSTRAP_N_RESAMPLES=2_000` (smaller than Phase 7's
+  10,000 — profiled empirically, see `PLAN.md` Phase 8 for why).
+  `statsmodels==0.15.0` newly installed (`.venv`) and added to
+  `requirements.txt` (cluster-robust OLS + VIF for the regression).
+- `results/error_analysis/{per_residue_features.parquet,band_metrics.csv,
+  regression.csv,length_analysis.csv,flagged_chains_summary.csv,
+  structural_feature_exclusions.csv}`, `results/figures/error_analysis_
+  {band_metrics,shift_vs_local_rmsd,aupr_drop_vs_length,flagged_vs_unflagged}.png`
+  — **new, Phase 8**: error-analysis outputs, see "Completed phases"
+  below for the numbers.
+- `logs/error_analysis.log` — full DEBUG log of the Phase 8 run (zero
+  `WARNING` lines — no missing Cα/pLDDT residues, no undersized bands, no
+  empty bootstrap groups).
 - Empty scaffold directories: `notebooks/` (`data/processed` and
   `results/` are now both populated, see above; PeSTo's model repo itself
   is checked out too, see above).
@@ -1135,23 +1184,133 @@ known-AUPR-drop recovery test. Full suite: 143/143 passing.
 leakage-filter-mode sensitivity (`exact_train`/`none`), any `af_full`
 comparison, the apo/unbound arm, and Phase 8.
 
+### Phase 8 — Error analysis (primary set, lean scope)
+
+**Done (2026-09-17), lean scope: primary set only (566 chains), `exp` vs.
+`af_trimmed`.** Analysis plan pre-registered in `PLAN.md` *before* any
+structural feature was computed (band definitions, bootstrap methodology
+and resample counts, regression design/SE method, descriptive analyses,
+association-not-causation framing, all committed to first); implemented
+exactly as registered in `src/analysis/structural_metrics.py` +
+`src/analysis/error_analysis.py`, runnable as
+`.venv/bin/python -m src.analysis.error_analysis`. See `PLAN.md`'s Phase
+8 pre-registration and completed write-up for full reasoning and every
+table; numbers repeated here for the execution log:
+
+- **Run:** 95,118 pooled residues across all 566 primary-set chains,
+  wall-clock 2m48s. Zero chain-level exclusions
+  (`results/error_analysis/structural_feature_exclusions.csv` empty) and
+  zero `WARNING` lines in `logs/error_analysis.log` -- every chain that
+  had Phase 7 predictions also had resolvable Calpha coordinates, pLDDT,
+  and a secondary-structure call for effectively every residue (only 1
+  residue project-wide dropped from the regression for a missing RSA
+  value).
+- **pLDDT source confirmed, not assumed:** AlphaFold DB mmCIFs store
+  per-residue pLDDT in `_atom_site.B_iso_or_equiv` (gemmi's
+  `atom.b_iso`), identical across all atoms of a residue, values in
+  AlphaFold's documented 0-100 range -- verified by direct inspection of
+  a real cached AlphaFold model before writing any code that assumed it.
+- **Secondary structure:** `mkdssp` confirmed not installed (no root
+  access, as already recorded); `biotite.structure.annotate_sse` (P-SEA,
+  3-state) used for all 566 chains.
+- **Primary analysis -- pLDDT-band metrics** (`results/error_analysis/band_metrics.csv`,
+  figure `error_analysis_band_metrics.png`; chain-resampled bootstrap
+  CIs, n=2,000 draws -- smaller than Phase 7's 10,000, profiled
+  empirically beforehand since each draw here recomputes a pooled
+  O(n log n) metric, not a cheap scalar median): the exp-vs-af_trimmed
+  AUPR gap shrinks monotonically with AlphaFold confidence -- **0.255
+  (`<50`, n=2,828) -> 0.117 (`50-70`, n=5,735) -> 0.071 (`70-90`,
+  n=23,762) -> 0.040 (`>=90`, n=62,793)**, a >6x reduction from lowest to
+  highest confidence band; ROC-AUC gap shows the same pattern (0.195 ->
+  0.075 -> 0.044 -> 0.022). Every band cleared `PLDDT_BAND_MIN_RESIDUES`
+  (30) comfortably, zero undefined bootstrap draws anywhere. This
+  directly answers Phase 8's primary question: yes, AlphaFold's own
+  confidence tracks where its structural error costs PeSTo accuracy.
+- **Secondary analysis -- shift regression** (`results/error_analysis/regression.csv`;
+  n=95,117, 566 clusters, cluster-robust CRV1 SEs by chain): standardized
+  `plddt_z` = **-0.0268** (p=3.9e-16), `local_rmsd_z` = **+0.0268**
+  (p=1.4e-9), `rsa_z` = **+0.0254** (p=1.4e-57), all independently
+  significant in the expected direction controlling for the others.
+  Secondary structure: helix +0.0115 vs. coil (p=9.8e-4), strand +0.0073
+  vs. coil (p=0.081, not significant). **No VIF exceeds
+  `VIF_COLLINEARITY_THRESHOLD` (5)** -- max is 1.64 (`plddt_z`) -- milder
+  collinearity between pLDDT and local RMSD than the pre-registration
+  flagged as a risk; both carry real independent signal.
+- **Descriptive -- chain length vs. AUPR drop** (`results/error_analysis/length_analysis.csv`,
+  figure `error_analysis_aupr_drop_vs_length.png`; n=554): **no
+  meaningful association** -- Spearman rho=0.028, 95% CI [-0.054, 0.108],
+  p=0.51; OLS slope ~ -3.3e-6/residue, p=0.96; length quartiles (mean
+  51/99/176/363 residues) show non-monotonic median drops
+  0.020/0.020/0.041/0.025. **This contradicts the pre-registration's a
+  priori hypothesis** that the pooled-vs-median gap was a length-
+  weighting effect -- the real explanation is that the per-chain drop
+  distribution is right-skewed (unweighted mean 0.061 vs. median 0.027),
+  length-weighting the mean barely changes it (0.061, almost identical
+  to unweighted), and pooled AUPR (0.070) isn't a weighted average of
+  per-chain AUPRs to begin with -- it's a separate rank-based statistic
+  over all residues combined. Reported as-is rather than reframed to fit
+  the original guess.
+- **Descriptive -- geometrically flagged (92) vs. unflagged (462)
+  chains** (`results/error_analysis/flagged_chains_summary.csv`, figure
+  `error_analysis_flagged_vs_unflagged.png`; two-sided Mann-Whitney U):
+  flagged chains have much higher mean local RMSD (2.21 vs. 0.67 Å,
+  p=4.2e-32) and global Ca distance (7.91 vs. 1.40 Å, p=9.5e-40), lower
+  mean pLDDT (77.4 vs. 87.9, p=2.8e-11), longer chain length (224 vs. 162
+  residues, p=2.5e-4), and a larger AUPR drop (0.108 vs. 0.052, p=0.02);
+  interface fraction does not differ (p=0.18). A coherent population --
+  consistent with Phase 4's addendum finding that this flag catches real
+  AlphaFold-vs-experimental 3D divergence, not a mapping artifact.
+- **Phase 9 gate:** both conditions (Phase 7 primary-endpoint
+  significance + a Phase 8 pLDDT-band effect) are now met for the first
+  time. Per the lean-scope decision, **Phase 9 is still not attempted**
+  -- that decision was to skip Phase 9 for this pass unconditionally, not
+  contingent on the gate outcome.
+- **Anything surprising:** the length-vs-drop null result is the
+  standout finding -- a reasonable a priori guess the data doesn't
+  support, worth remembering if this dataset is revisited. Also notable:
+  pLDDT/local-RMSD collinearity (VIF 1.6) was milder than expected going
+  in.
+
+**Tests:** `tests/test_structural_metrics.py` (11 tests: Kabsch recovers
+a known rotation; local RMSD near-zero for a rigidly moved copy and large
+only near a locally perturbed region; too-few-neighbors flagged with a
+reason, not silently dropped; global Ca distance sanity checks; pLDDT
+band boundary assignment; I/O helpers against hand-built synthetic
+mmCIFs with real coordinates/B-factors) + `tests/test_error_analysis.py`
+(7 tests: every band reported including empty ones, undersized flagging;
+chain-resampled bootstrap demonstrated at chain granularity via a
+2-chain discrete-outcome check and an always-single-class-chain
+undefined-draw-rate check; regression recovers known standardized
+coefficients on synthetic clustered data; VIF correctly flags a
+constructed collinear predictor pair and correctly does not flag an
+independent one). Full suite: 161/161 passing.
+
+**Deferred, not part of this pass** (per the lean-scope decision): the
+apo/unbound arm (no unbound-structure local RMSD), `af_full`, and any
+leakage-sensitivity-mode analysis.
+
 ## Next step
 
-**Do not start Phase 8** without an explicit go-ahead (explicit
-instruction this session) -- Phase 7's outputs
-(`results/benchmark/`, `results/figures/`) are ready to be consumed by
-it if/when it starts. Deferred items that would need to happen first if
-this project ever goes beyond the lean scope: the ~250-chain seeded
-subsamples for the `exact_train`/`none` leakage-sensitivity modes (needs
-its own Phase 6 inference run -- only the primary set has predictions so
-far), and any `af_full`/apo-arm comparison.
+Phases 1-8 (lean scope) are done. **Phase 9 is explicitly out of scope
+for this lean pass** (see the lean-scope decision and Phase 8's gate note
+above) -- both its gate conditions are now met, but that doesn't reopen
+the question; don't start it without a new explicit instruction. Deferred
+items that would need to happen first if this project ever goes beyond
+the lean scope: the ~250-chain seeded subsamples for the
+`exact_train`/`none` leakage-sensitivity modes (needs its own Phase 6
+inference run -- only the primary set has predictions so far), any
+`af_full`/apo-arm comparison, and (for Phase 8 specifically) the
+apo/unbound arm's own local RMSD. Phase 10 (report generation) has not
+been started.
 
-Open question #3 from `PLAN.md` Sec. 5 is now partially resolved: Phase
-7's own primary-endpoint alpha (0.05) is fixed and was met (p ~ 3.5e-17).
-The *combined* Phase 9 gate (Phase 7 significance + a Phase 8 pLDDT-band
-effect) is still unconfirmed -- decide before Phase 8 runs, if Phase 8/9
-are ever picked back up. Per the lean-scope decision, Phase 7's result
-does not by itself trigger Phase 9.
+Open question #3 from `PLAN.md` Sec. 5 is now fully resolved for this
+project's purposes: Phase 7's own primary-endpoint alpha (0.05) is fixed
+and was met (p ~ 3.5e-17), and Phase 8 confirmed a pLDDT-band effect
+(monotonic, >6x AUPR-gap shrinkage from lowest to highest confidence
+band, plus a significant `plddt_z` regression coefficient) -- **the
+combined Phase 9 gate is met, as of 2026-09-17.** Per the lean-scope
+decision, this still does not by itself start Phase 9 -- that remains a
+separate, not-yet-given instruction.
 
 **Worth considering before Phase 6 or later:** whether Phase 3 should be
 revisited to add an explicit `providerId == "GDM"` check at fetch time
