@@ -138,7 +138,7 @@ summary of *why* each phase is designed the way it is.
 
 ## 5. Current status
 
-*Last updated: 2026-09-16. See [`PROGRESS.md`](PROGRESS.md) for the
+*Last updated: 2026-09-18. See [`PROGRESS.md`](PROGRESS.md) for the
 detailed, actively-maintained log this section is drawn from.*
 
 - ✅ **Phase 1 — Candidate selection**: done, run at full scale against the
@@ -229,8 +229,30 @@ detailed, actively-maintained log this section is drawn from.*
   were also run this session: the AlphaFold-vs-experimental structural
   agreement for the primary set, and the spatial plausibility of Phase
   5's interface labels — both described further in `PROGRESS.md`.
-- ⬜ Phases 7–10 — not yet started (do not start without confirming the
-  sanity-check result above first).
+- ✅ **Phase 7 — Benchmarking (experimental vs. trimmed AlphaFold)**: done,
+  same lean scope as Phase 6 (566 primary-set chains, real structure vs.
+  trimmed AlphaFold model). Before looking at any result, the exact
+  statistical tests, significance threshold, and descriptive breakdowns
+  were written down in `PLAN.md` and committed to in advance, so the
+  comparison couldn't be tuned after the fact. **Headline finding:**
+  PeSTo is more accurate on real structures than on AlphaFold models of
+  the same chains — reliably so (this held in every one of eight
+  different ways the data was sliced, and also under a stricter,
+  alternative definition of "interface"), but the typical difference per
+  chain is modest, not dramatic: on a 0-to-1 accuracy scale where higher
+  is better, the median chain-level gap is about 0.03. In plain terms —
+  AlphaFold inputs are worse on average and the pattern is very unlikely
+  to be due to chance, but for many individual chains the two inputs give
+  similar results, and it would overstate the finding to call AlphaFold
+  inputs "much worse" across the board. 12 of the 566 chains (2%) couldn't
+  be scored at all because every one of their measured residues was
+  labeled part of the interface, leaving no non-interface residues to
+  compare against (a technical requirement of the accuracy measures used,
+  not a data problem). Full numbers, figures, and the strata breakdown are
+  in `results/benchmark/` and `results/figures/`, and described further in
+  `PROGRESS.md` and `PLAN.md`.
+- ⬜ Phases 8–10 — not yet started (do not start without confirming the
+  Phase 7 result above first).
 
 ## 6. Repository layout
 
@@ -305,6 +327,11 @@ sequence-identity cutoffs, etc.) are centralized in `src/config.py` — see
 # Geometric/spatial verification (substitutes for ChimeraX-based checks)
 .venv/bin/python scripts/validate_mapping_geometry.py
 .venv/bin/python scripts/validate_interface_labels.py --n 20 --seed 0
+
+# Phase 7: benchmarking PeSTo on exp vs. af_trimmed (primary set, lean scope)
+# (writes results/benchmark/{per_chain_metrics,summary,strata,exclusions}.csv,
+# results/figures/*.png)
+.venv/bin/python -m src.analysis.benchmark
 ```
 
 All download-based commands (Phases 1-3) cache every downloaded file

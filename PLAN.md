@@ -884,7 +884,183 @@ addenda, since ChimeraX-based hand-verification wasn't available):** see
 the new bullets under Phase 4 and Phase 5 above
 (`scripts/validate_mapping_geometry.py`, `scripts/validate_interface_labels.py`).
 
-### Phase 7 — Benchmarking
+### Phase 7 analysis plan (pre-registered 2026-09-18, before any AlphaFold comparison was computed)
+
+Scope this pass: primary set only (566 chains), `exp` vs. `af_trimmed`
+(per the lean-scope decision above). Committed to below *before* running
+`src/analysis/benchmark.py` against real predictions.
+
+- **Primary endpoint:** per-chain paired difference in AUPR, `exp` minus
+  `af_trimmed`, computed only over chains where both are defined (see
+  exclusions below). Tested with a two-sided Wilcoxon signed-rank test on
+  the paired differences; a 95% bootstrap CI on the **median** paired
+  difference (not the mean, since AUPR differences are not expected to be
+  symmetric). Significance threshold: **alpha = 0.05**, two-sided — this
+  also resolves `PLAN.md` Sec. 5 open question #3 for Phase 7's own use
+  (Phase 9's gate is separately out of scope this pass regardless of what
+  Phase 7 finds, per the lean-scope decision, so this does not by itself
+  trigger Phase 9).
+- **Secondary endpoints:**
+  - The same paired-difference/Wilcoxon/bootstrap-CI construction, for
+    ROC-AUC instead of AUPR.
+  - Pooled-residue AUPR and pooled-residue ROC-AUC, computed separately
+    for `exp` and for `af_trimmed` (not a paired/difference statistic —
+    each input's own pooled number, reported side by side).
+- **Bootstrap:** resamples **chains**, not residues (residues within a
+  chain are not independent observations) — with replacement, `n =
+  config.BOOTSTRAP_N_RESAMPLES` (10,000), seeded
+  (`config.PHASE7_BOOTSTRAP_SEED`), 95% CI via the percentile method.
+- **Pre-specified strata (descriptive only — reported side by side with
+  n per stratum, not additional hypothesis tests, not multiple-comparison
+  corrected):**
+  1. Homomeric vs. heteromeric partners (`labels_report.csv`'s
+     `has_homomeric_partner`).
+  2. Interface fraction below vs. at/above a threshold —
+     `config.INTERFACE_FRACTION_STRATUM_THRESHOLD` (0.5, new constant),
+     applied to `labels_report.csv`'s `interface_fraction_distance`.
+  3. Chains flagged by the Phase 4 geometric validation
+     (`phase4_geometric_validation.csv`, `longest_far_run >= 5`, the same
+     rule already used to report that addendum) vs. unflagged.
+  4. All residues vs. surface-only residues (`rsa >=
+     config.SURFACE_RSA_THRESHOLD`, existing constant, 0.25).
+- **Robustness check:** the primary endpoint (paired AUPR difference,
+  Wilcoxon, bootstrap CI) repeated with the ground-truth label swapped
+  from the distance label (`is_interface_contact`) to the ΔSASA label
+  (`is_interface_sasa`) — same chains, same predictions, only the
+  "ground truth" changes.
+- **Exclusions, logged with a count, never silent:** a chain is excluded
+  from a given metric (ROC-AUC or AUPR, for a given input) if that
+  metric is undefined for it (all-one-class labels over the scored
+  residue set). A chain is excluded from a *paired* comparison (primary
+  or secondary endpoint) if the metric is undefined for *either* input.
+  Pooled-residue metrics use every scored residue regardless of any
+  single chain's per-chain definedness.
+- **Deferred, not part of this pass** (per the lean-scope decision):
+  leakage-filter-mode sensitivity (the ~250-chain seeded subsamples for
+  `exact_train`/`none`) and any `af_full` comparison.
+
+### Phase 7 — Benchmarking on experimental vs. trimmed-AlphaFold inputs — **DONE, lean scope** (2026-09-18)
+
+Implemented exactly the pre-registered plan above, no deviations. Code:
+`src/analysis/benchmark.py` (run as `.venv/bin/python -m src.analysis.benchmark`),
+tests in `tests/test_benchmark.py` (5 tests, all passing; full suite 143/143).
+
+**Join / same-residue-set assertion.** For each of the 566 primary-set
+chains: `data/interim/interface_labels/{pdb}_{chain}.parquet` (all
+Phase-4-observed residues, `uniprot_resnum` null for unmapped ones) is
+filtered to mapped residues, then inner-joined to `exp` predictions on
+`(auth_seq_id, auth_ins_code)` and to `af_trimmed` predictions on
+`uniprot_resnum`. `assert_same_residue_set` independently checks that the
+auth-keyed residue set covered by `exp` and the auth-keyed set
+corresponding (via the mapping) to `af_trimmed` both equal the full mapped
+set, raising rather than silently trusting the join. All 566 chains passed
+this assertion with zero exclusions (`results/benchmark/exclusions.csv` is
+empty) — Phase 4/5/6's residue bookkeeping held up with no join-level
+surprises.
+
+**Results** (full numbers in `results/benchmark/summary.csv` and
+`strata.csv`; figures in `results/figures/`):
+
+- **Primary endpoint** — paired AUPR difference (exp − af_trimmed), n=554
+  chains (12 excluded, see below): median difference **+0.027**, 95%
+  bootstrap CI **[0.019, 0.035]**, two-sided Wilcoxon p ≈ 3.5e-17.
+  Experimental inputs are better, consistently and significantly, but by a
+  small-to-moderate margin on the AUPR scale, not a dramatic one — see
+  "plain-terms" note below.
+- **Secondary — paired ROC-AUC difference:** median **+0.027**, CI
+  **[0.018, 0.037]**, p ≈ 4.6e-19. Same direction and similar magnitude to
+  AUPR.
+- **Secondary — pooled-residue metrics** (95,118 residues pooled across
+  all 566 chains, large chains dominating by construction): exp AUPR
+  **0.739**, af_trimmed AUPR **0.669**, both far above the pooled interface
+  base rate of **0.223** (so both are informative, not just "beating a
+  coin flip" — but the base rate matters for reading the AUPR numbers at
+  face value). Pooled ROC-AUC: exp **0.882**, af_trimmed **0.849**.
+- **Prediction-shift descriptives:** per-chain Spearman correlation
+  between exp and af_trimmed probabilities and mean absolute probability
+  shift are in `per_chain_metrics.csv` (`spearman_exp_vs_af_trimmed`,
+  `mean_abs_prob_shift`) — not a hypothesis test, just a description of
+  how much the predictions move between inputs.
+- **Robustness (ΔSASA labels):** primary endpoint recomputed with
+  `is_interface_sasa` instead of `is_interface_contact`: median
+  **+0.026**, CI **[0.020, 0.034]**, p ≈ 3.0e-17 — indistinguishable in
+  practice from the distance-label result. The primary finding is not an
+  artifact of the distance-cutoff label definition.
+- **Strata (descriptive, not additional hypothesis tests; all as paired
+  AUPR-difference median/CI/p within the stratum)**:
+
+  | stratum | value | n | median diff | 95% CI | p |
+  |---|---|---|---|---|---|
+  | partner_type | heteromeric | 390 | 0.034 | [0.024, 0.047] | 9.5e-12 |
+  | partner_type | homomeric | 164 | 0.017 | [0.007, 0.025] | 3.8e-07 |
+  | interface_size | small (<0.5) | 434 | 0.035 | [0.025, 0.046] | 6.9e-12 |
+  | interface_size | large (≥0.5) | 120 | 0.015 | [0.009, 0.022] | 3.4e-10 |
+  | geometric_validation | unflagged | 462 | 0.024 | [0.015, 0.033] | 6.0e-13 |
+  | geometric_validation | flagged | 92 | 0.059 | [0.023, 0.108] | 7.0e-06 |
+  | residue_scope | all_residues | 554 | 0.027 | [0.019, 0.035] | 3.5e-17 |
+  | residue_scope | surface_only | 554 | 0.020 | [0.014, 0.030] | 8.2e-15 |
+
+  All eight strata show the same direction (exp better) and all are
+  individually significant at alpha=0.05 — the effect doesn't reverse or
+  vanish in any pre-registered slice, though its size varies (largest for
+  the small subset of Phase-4-geometrically-flagged chains, n=92, where
+  the CI is also widest; smallest for large-interface and homomeric
+  chains). These are descriptive, per the pre-registration, not additional
+  confirmatory tests.
+
+**Exclusions.** 12 of 566 chains (2.1%) excluded from every AUPR/ROC-AUC
+metric (and so from the paired comparisons): all 12 have every scored
+residue labeled interface (single-class ground truth — small chains
+entirely at a binding interface, e.g. `n_positive == n` ranging 7-26
+residues), making ROC-AUC/AUPR undefined regardless of predictions. Zero
+chains excluded for join/residue-set problems. Pooled metrics use all 566
+chains' residues regardless (pooling doesn't require per-chain
+definedness).
+
+**Plain-terms summary.** PeSTo is measurably and consistently more
+accurate on real (experimental) structures than on trimmed AlphaFold
+models of the same chains, and this holds up under a stricter label
+definition (ΔSASA), across homomeric/heteromeric partners, across
+small/large interfaces, across Phase-4-flagged/unflagged chains, and
+whether all residues or only surface residues are scored. The effect is
+statistically unambiguous (p-values are tiny, driven by a large,
+mostly-consistent-direction paired sample, not a borderline result) but
+the typical chain-level gap is a few AUPR points (median ≈0.03 on a 0-1
+scale) — most chains cluster near the identity line in
+`results/figures/paired_aupr_scatter.png`, with a right-skewed tail of
+chains where AlphaFold input costs noticeably more. It would overstate
+this to call AlphaFold inputs "much worse" across the board; it is more
+accurate to say AlphaFold inputs are worse on average, reliably so, and
+occasionally by a lot, while for many individual chains the two inputs
+are close.
+
+**Anything surprising:** no residue-set/join surprises (0 exclusions there
+— Phase 4-6's bookkeeping is solid); the 12 metric-exclusion chains are
+all fully-interface small chains, not an edge case anticipated in the
+pre-registration but handled cleanly by the "undefined metric" exclusion
+rule without any special-casing; the ΔSASA robustness result is
+essentially identical to the primary result, which is reassuring (the
+finding isn't sensitive to label definition) but also means ΔSASA didn't
+add much independent information here; the Phase-4-geometrically-flagged
+stratum (n=92) shows the *largest* effect and also the widest CI, worth
+keeping in mind if those chains are revisited in Phase 8.
+
+**Deferred, not part of this pass** (per the lean-scope decision):
+leakage-filter-mode sensitivity (`exact_train`/`none`), any `af_full`
+comparison, and the apo/unbound arm.
+
+### Phase 7 — Benchmarking (original full-scope sketch)
+
+**Superseded for this pass by the pre-registered analysis plan above and
+the actual implementation below** — the sketch immediately following was
+never revised after Phase 6 changed the actual output paths/schema
+(`results/predictions/pesto/*` and `data/processed/interface_labels/*`
+don't exist; the real paths are `data/processed/predictions/{exp,af_trimmed}/`
+and `data/interim/interface_labels/`), so, per the same precedent as
+Phases 3-6, it's treated as the original provisional design, not a
+decision to preserve as-is. Kept below for the full (non-lean) design's
+historical record.
+
 - **Inputs:** `results/predictions/pesto/*`, `data/processed/interface_labels/*`.
 - **Outputs:** `results/metrics/per_protein_metrics.parquet` (`id`, `source`,
   `roc_auc`, `aupr`, `base_rate`, `n_residues`), `results/metrics/pooled_metrics.json`,
@@ -1167,10 +1343,17 @@ that gate is reached. Remaining:
    onward — consistent with (not proof of) PeSTo's training snapshot
    extending to roughly 2020-2021, well past the AF2 2018-04-30 cutoff. See
    `data/interim/leakage_by_release_year.csv` and PROGRESS.md.
-3. What preregistered significance threshold should the Phase 9 gate use
-   (this plan assumes Wilcoxon p<0.05 on the primary mode plus a
-   pLDDT-band effect in Phase 8) — confirm before Phase 7 runs, so the gate
-   isn't chosen after seeing the results.
+3. **Partially resolved (2026-09-18):** Phase 7's own primary-endpoint
+   significance threshold is now fixed at alpha=0.05, two-sided (see the
+   Phase 7 analysis plan pre-registration and the completed Phase 7
+   write-up above) — Phase 7 did find a significant primary-endpoint
+   result (p ≈ 3.5e-17) under that threshold. Still open: the *combined*
+   Phase 9 gate (this plan assumes Phase 7 significance plus a pLDDT-band
+   effect in Phase 8) has not been separately confirmed, and per the
+   lean-scope decision Phase 9 is out of scope regardless of what Phase 7
+   found, so this Phase 7 result does not by itself trigger Phase 9 —
+   confirm the combined gate before Phase 8 is run, if Phase 8/9 are ever
+   picked back up.
 
 ## 6. Risks
 

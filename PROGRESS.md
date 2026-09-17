@@ -6,7 +6,7 @@ it whenever you finish a chunk of work or make a decision that changes the
 plan. `PLAN.md` is the design document (10 phases, confounds, deviations);
 this file tracks execution against it.
 
-Last updated: 2026-09-17.
+Last updated: 2026-09-18.
 
 ## Where things stand
 
@@ -45,10 +45,19 @@ exceeded the memory ceiling** (the lean scope's real primary-set atom
 counts turned out to fit comfortably). **Part C sanity check passed:**
 pooled ROC-AUC of PeSTo's experimental-input predictions against Phase
 5's distance labels = **0.882** — confirms the interface channel and
-residue joins are correct before any real benchmarking. **Do not start
-Phase 7 without an explicit go-ahead** (explicit instruction this
-session) — see "Completed phases" for the full numbers and "Next step"
-for what's pending.
+residue joins are correct before any real benchmarking. **Phase 7
+(benchmarking exp vs. af_trimmed, primary set) is now also done, lean
+scope** (2026-09-18) — pre-registered analysis plan committed to in
+`PLAN.md` before any comparison was run, then implemented exactly as
+registered in `src/analysis/benchmark.py`. **Headline result: PeSTo is
+significantly and consistently more accurate on experimental structures
+than on trimmed AlphaFold models of the same 554 (of 566) chains** —
+paired median AUPR difference **+0.027**, 95% CI **[0.019, 0.035]**,
+Wilcoxon p ≈ 3.5e-17 — but the typical per-chain gap is modest (a few
+AUPR points), not dramatic; see "Completed phases" for the full numbers,
+all eight pre-registered strata, and the ΔSASA robustness check (which
+reproduces the same result). **Do not start Phase 8** (explicit
+instruction this session) — see "Next step" for what's pending.
 
 The earlier 500-entry pilot run (Phase 1 + Phase 2) is preserved at
 `data/interim/pilot_500/` for before/after comparison, not overwritten.
@@ -225,10 +234,19 @@ assume a green light carries over between sessions.
   nohup-redirected console stream from the full primary run (per this
   session's explicit request); the latter is `run_pesto.py`'s own DEBUG
   log (same convention as every other phase).
-- Empty scaffold directories: `results/`, `notebooks/` (`data/processed`
-  is now populated, see above; PeSTo's model repo itself is now checked
-  out too, see above — both were still pending as of the last update, a
-  Phase 6 input).
+- `src/analysis/benchmark.py` — Phase 7 implementation (see "Completed
+  phases" below), runnable as `.venv/bin/python -m src.analysis.benchmark`.
+  `tests/test_benchmark.py` (5 tests, passing, no network, synthetic
+  fixtures only). New `config.py` constants: `BOOTSTRAP_N_RESAMPLES=10_000`,
+  `PHASE7_BOOTSTRAP_SEED=0`, `INTERFACE_FRACTION_STRATUM_THRESHOLD=0.5`.
+- `results/benchmark/{per_chain_metrics,summary,strata,exclusions}.csv`,
+  `results/figures/{paired_aupr_scatter,aupr_diff_distribution,
+  pooled_pr_curve,pooled_roc_curve}.png` — **new, Phase 7**: benchmark
+  outputs, see "Completed phases" below for the numbers.
+- `logs/benchmark.log` — full DEBUG log of the Phase 7 run.
+- Empty scaffold directories: `notebooks/` (`data/processed` and
+  `results/` are now both populated, see above; PeSTo's model repo itself
+  is checked out too, see above).
 
 ## Decisions already made (don't re-derive these — see `PLAN.md` for full reasoning)
 
@@ -1055,20 +1073,85 @@ every job succeeded. The two real surprises this session were both found
 collision, both in "Decisions already made" above), which is exactly why
 the smoke-testing and calibration steps existed.
 
+### Phase 7 — Benchmarking on experimental vs. trimmed-AlphaFold inputs (lean scope)
+
+**Done (2026-09-18), lean scope: primary set only (566 chains), `exp` vs.
+`af_trimmed`.** Analysis plan pre-registered in `PLAN.md` *before* any
+comparison was computed (endpoints, strata, robustness check, alpha=0.05,
+all committed to first); implemented exactly as registered in
+`src/analysis/benchmark.py`, runnable as
+`.venv/bin/python -m src.analysis.benchmark`. See `PLAN.md`'s Phase 7
+pre-registration and completed write-up for full reasoning and the
+strata table; numbers repeated here for the execution log:
+
+- **Join/assertion:** all 566 chains passed the same-residue-set
+  assertion (auth-keyed `exp` coverage == auth-keyed `af_trimmed`
+  coverage == the full Phase-4-mapped set) with zero exclusions --
+  `results/benchmark/exclusions.csv` is empty.
+- **Metric exclusions:** 12/566 chains (2.1%) excluded from every
+  ROC-AUC/AUPR metric -- all 12 are fully-interface chains (every scored
+  residue labeled interface, 7-26 residues each), making the metrics
+  undefined regardless of predictions. Not anticipated in the
+  pre-registration but handled cleanly by the generic "undefined metric"
+  exclusion rule.
+- **Primary endpoint** (paired AUPR difference, exp - af_trimmed,
+  n=554): median **+0.027**, 95% bootstrap CI **[0.019, 0.035]**,
+  two-sided Wilcoxon **p ~ 3.5e-17**.
+- **Secondary -- paired ROC-AUC difference:** median **+0.027**, CI
+  **[0.018, 0.037]**, p ~ 4.6e-19.
+- **Secondary -- pooled-residue metrics** (95,118 residues, large chains
+  dominating by construction): exp AUPR **0.739**, af_trimmed AUPR
+  **0.669**, pooled interface base rate **0.223**; pooled ROC-AUC exp
+  **0.882** / af_trimmed **0.849**.
+- **Robustness (DeltaSASA labels instead of distance labels):** median
+  **+0.026**, CI **[0.020, 0.034]**, p ~ 3.0e-17 -- essentially identical
+  to the primary (distance-label) result.
+- **All eight pre-registered strata** (homomeric/heteromeric;
+  small/large interface fraction at the 0.5 threshold;
+  Phase-4-geometrically-flagged/unflagged; all-residues/surface-only)
+  show the same direction and are each individually significant at
+  alpha=0.05; effect size ranges from +0.015 (large interfaces, n=120) to
+  +0.059 (geometrically-flagged chains, n=92, also the widest CI). Full
+  table in `results/benchmark/strata.csv` and `PLAN.md`.
+- **Figures** (`results/figures/`): `paired_aupr_scatter.png` (most
+  chains cluster near the identity line with a tilt toward
+  exp-better and a right-skewed tail); `aupr_diff_distribution.png`
+  (sharp peak near zero, right-skewed); `pooled_pr_curve.png`,
+  `pooled_roc_curve.png` (exp visibly above af_trimmed at every
+  threshold, both well above the base rate).
+- **Plain-terms reading:** the difference is real, consistent in
+  direction across every slice examined, and highly statistically
+  significant -- but it is not large in absolute terms for a typical
+  chain (median ~0.03 AUPR points); avoid characterizing this as
+  AlphaFold inputs being "much worse" across the board.
+
+**Tests:** `tests/test_benchmark.py` (5 tests, no network, synthetic
+fixtures) -- metrics-vs-sklearn agreement, single-class exclusion with a
+logged count, the same-residue-set assertion raising on a real mismatch,
+chain- (not residue-) level bootstrap behavior, and a synthetic
+known-AUPR-drop recovery test. Full suite: 143/143 passing.
+
+**Deferred, not part of this pass** (per the lean-scope decision):
+leakage-filter-mode sensitivity (`exact_train`/`none`), any `af_full`
+comparison, the apo/unbound arm, and Phase 8.
+
 ## Next step
 
-**Do not start Phase 7** without an explicit go-ahead (explicit
-instruction this session) -- Phase 6's outputs
-(`data/processed/predictions/{exp,af_trimmed}/`,
-`data/interim/inference_report.csv`) are ready to be consumed by it. When
-Phase 7 does start, it should also generate the ~250-chain seeded
-subsamples for the `exact_train`/`none` leakage-sensitivity modes per the
-lean-scope decision (`PLAN.md`), which will need their own Phase 6
-inference run first (not yet done -- only the primary set has
-predictions so far).
+**Do not start Phase 8** without an explicit go-ahead (explicit
+instruction this session) -- Phase 7's outputs
+(`results/benchmark/`, `results/figures/`) are ready to be consumed by
+it if/when it starts. Deferred items that would need to happen first if
+this project ever goes beyond the lean scope: the ~250-chain seeded
+subsamples for the `exact_train`/`none` leakage-sensitivity modes (needs
+its own Phase 6 inference run -- only the primary set has predictions so
+far), and any `af_full`/apo-arm comparison.
 
-Open question #3 from `PLAN.md` §5 (the Phase 9 significance threshold)
-is still unresolved and still cheap to decide now.
+Open question #3 from `PLAN.md` Sec. 5 is now partially resolved: Phase
+7's own primary-endpoint alpha (0.05) is fixed and was met (p ~ 3.5e-17).
+The *combined* Phase 9 gate (Phase 7 significance + a Phase 8 pLDDT-band
+effect) is still unconfirmed -- decide before Phase 8 runs, if Phase 8/9
+are ever picked back up. Per the lean-scope decision, Phase 7's result
+does not by itself trigger Phase 9.
 
 **Worth considering before Phase 6 or later:** whether Phase 3 should be
 revisited to add an explicit `providerId == "GDM"` check at fetch time

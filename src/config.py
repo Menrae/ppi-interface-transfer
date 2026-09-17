@@ -180,3 +180,24 @@ PESTO_CONCURRENCY_TIERS = (
     (5000, 2, 3),
     (PESTO_MAX_ATOMS, 1, 4),
 )
+
+# --- Phase 7: benchmarking -------------------------------------------------
+
+# Number of chain-level bootstrap resamples (with replacement) for every
+# 95% CI in src.analysis.benchmark. Chains, not residues, are resampled --
+# residues within one chain aren't independent observations. 10,000 is
+# comfortably enough for a stable percentile CI on ~500 chains and runs in
+# well under a second.
+BOOTSTRAP_N_RESAMPLES = 10_000
+
+# Fixed seed for the chain-resampling bootstrap, so every CI is exactly
+# reproducible.
+PHASE7_BOOTSTRAP_SEED = 0
+
+# Threshold on a chain's ground-truth interface fraction (Phase 5's
+# interface_fraction_distance) used to split the pre-registered "small vs.
+# large interface" descriptive stratum in Phase 7. 0.5 is the example
+# given when this threshold was pre-registered (PLAN.md Phase 7 analysis
+# plan) -- an even split of "less than half the chain is interface" vs.
+# "at least half," not independently re-derived from the data.
+INTERFACE_FRACTION_STRATUM_THRESHOLD = 0.5
