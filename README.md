@@ -377,6 +377,32 @@ under `data/raw/`, so rerunning them doesn't re-fetch anything that's
 already on disk. Phases 4-6 are purely local computations (no network,
 aside from Phase 6's one-time `external/PeSTo` git clone).
 
+### Building the results paper
+
+`paper/results_paper.pdf` (6-8 page print summary of Phases 1-8, written for
+a general-science-background reader) is fully regenerated -- every number,
+table, and figure -- from `results/` and `data/interim/` by one script:
+
+```bash
+.venv/bin/python paper/build_paper.py
+```
+
+This computes every reported statistic directly from the pipeline's own
+output files (never hand-typed), regenerates all 6 figures as print-ready
+vector PDFs (colorblind-safe Okabe-Ito palette; the one exception is the
+example-structure figure, a raster PNG -- see below) into `paper/figures/`,
+fills `paper/template.tex`'s placeholders, and compiles the PDF.
+**PDF route:** `pdflatex` (found on `PATH`; run twice for cross-references),
+checked for before falling back to a pip-installable route, per the build
+script's own preference order. **Structure figure:** `pymol-open-source` and
+plain `pymol` are not published on PyPI, and `pyvista`/VTK (also
+pip-installable) segfaults in this container with no X server, EGL, or
+OSMesa available and no root access to install them -- so
+`fig_example_structure` in `build_paper.py` falls back to a plain matplotlib
+3D rendering of the Calpha trace, colored by true-interface/predicted-probability
+value (not a rendered molecular surface), exactly as the build script's own
+docstring records.
+
 ## 7. Deviations from the original proposal
 
 The [original proposal](docs/proposal.txt) differs from the implemented
