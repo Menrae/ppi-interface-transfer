@@ -784,8 +784,11 @@ def build_context() -> dict:
     if example_info["rendered_externally"]:
         ex_figure_file = "figures/example_chain_render.png"
         ex_render_note = (
-            "externally rendered (see the accompanying repository's README.md "
-            "for what this image shows and how it was produced)"
+            "rendered with PyMOL (cartoon representation), not a C$\\alpha$ trace; "
+            "the AlphaFold model in (c) is Kabsch-superposed onto the experimental "
+            "structure and all three panels share one camera orientation -- see "
+            "scripts/render\\_example\\_chain.py and the accompanying repository's "
+            "README.md for how this image was produced"
         )
     else:
         ex_figure_file = "figures/fig6_structure_example.png"

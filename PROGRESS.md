@@ -6,7 +6,7 @@ it whenever you finish a chunk of work or make a decision that changes the
 plan. `PLAN.md` is the design document (10 phases, confounds, deviations);
 this file tracks execution against it.
 
-Last updated: 2026-09-18.
+Last updated: 2026-09-19.
 
 ## Where things stand
 
@@ -141,6 +141,26 @@ session's changes (the audit fixes above, Phase 8b, and the rebuilt paper)
 are not yet committed** — confirm with the user before committing/pushing,
 per their standing preference to review first; don't assume a green light
 carries over between sessions.
+
+**Fig. 6 now uses a real PyMOL structure render instead of the matplotlib
+Calpha-trace fallback (2026-09-19)**, per an explicit time-boxed request to
+try a real molecular renderer. See "Decisions already made" and README.md
+for the full writeup: PyMOL via conda-forge in an isolated env
+(`external/pymol_render_env`, gitignored, not `.venv`/`astro`), after
+ChimeraX was tried and ruled out for this specific container (glibc/libGL
+issues, no root); `scripts/render_example_chain.py` produces the figure
+and is rerunnable for a different chain. Two real bugs were found and
+worked around building it (PyMOL's `pair_fit` silently truncating past
+~110 atom-pair arguments; the AlphaFold object staying visible/uncolored
+under the experimental one in two of the three panels) — both documented
+in "Decisions already made" in case they matter for other uses of PyMOL in
+this project. Confirmed the render env is not a pipeline/test dependency:
+grepped `src/`, `tests/`, and `paper/build_paper.py` for any reference to
+it (none), and simulated a clean checkout by moving
+`external/pymol_render_env` and the rendered PNG aside — both
+`paper/build_paper.py` (falls back to the matplotlib render, disclaimer
+text intact) and the full `pytest` suite (170 passed) still succeed
+without it.
 
 ## What exists on disk right now
 
@@ -357,21 +377,81 @@ carries over between sessions.
   `data/interim/` in one command
   (`.venv/bin/python paper/build_paper.py`); no number in the paper is
   hand-typed. See README.md's "Building the results paper" section for
-  the PDF route (`pdflatex`) and the structure-figure fallback
-  (matplotlib Calpha trace, since no headless 3D molecular renderer could
-  be installed in this container -- `pymol`/`pymol-open-source` aren't on
-  PyPI, `pyvista`/VTK segfaults with no X/EGL/OSMesa and no root access).
-  `paper/figures/example_chain_render.png`, if a real render is ever
-  dropped in there, overrides the matplotlib fallback automatically (no
-  code change needed) -- see README.md for exactly what it should show.
-  9 pages as of this session's audit rebuild (2026-09-18), 7 figures, 4
-  tables.
+  the PDF route (`pdflatex`). The structure figure (Fig. 6) is now a real
+  PyMOL render (see the new entry below and README.md); the matplotlib
+  Calpha-trace fallback in `fig_example_structure` is unchanged and
+  triggers automatically if `paper/figures/example_chain_render.png` is
+  ever absent. 9 pages as of this session's rebuild (2026-09-19), 7
+  figures, 4 tables.
+- `scripts/render_example_chain.py` — **new, 2026-09-19**: produces
+  `paper/figures/example_chain_render.png` (real PyMOL cartoon render,
+  not the matplotlib fallback) for a given `--pdb-id --chain-id --output`.
+  Two-stage (data prep under `.venv`, rendering subprocess'd into
+  `external/pymol_render_env`'s own Python) but one command either way.
+  See "Decisions already made" below and README.md for the full writeup
+  (tools tried/ruled out, the `pair_fit` bug, the afA-visibility bug, the
+  camera-facing check, print-resolution/legibility settings).
+- `external/pymol_render_env/` — **new, 2026-09-19**: isolated conda env
+  (`conda create -p external/pymol_render_env -c conda-forge
+  pymol-open-source`), ~1.6 GB, gitignored via the existing `/external/`
+  pattern. Figure-only tool, not a project dependency: nothing in `src/`,
+  `tests/`, or `paper/build_paper.py` imports from it or requires it to
+  exist (confirmed by grep and by a clean-checkout simulation -- moving
+  this env and the rendered PNG aside and rerunning `build_paper.py` and
+  the full pytest suite both still succeed, via the matplotlib fallback).
 - Empty scaffold directories: `notebooks/` (`data/processed` and
   `results/` are now both populated, see above; PeSTo's model repo itself
   is checked out too, see above).
 
 ## Decisions already made (don't re-derive these — see `PLAN.md` for full reasoning)
 
+- **Fig. 6 structure render: PyMOL (`pymol-open-source`, conda-forge,
+  isolated env), decided 2026-09-19, after ChimeraX was tried and ruled
+  out for this container.** ChimeraX's Ubuntu 24.04 `.deb` extracts fine
+  with `dpkg-deb -x` (no root) but needs glibc >=2.34/2.38, newer than
+  this container's Ubuntu 20.04 (glibc 2.31); the last ChimeraX release
+  with a matching Ubuntu 20.04 build (1.9) runs but its offscreen
+  rendering needs `libGL.so.1`, absent system-wide with no root-installable
+  path here (resolving Mesa's full transitive dependency chain --
+  `libglx-mesa0`, a software/llvmpipe DRI driver, a matching `libLLVM`,
+  `libdrm2`, `libsensors5`, ... -- by hand-downloading individual `.deb`s
+  without `apt` was judged not worth it once PyMOL was already confirmed
+  working). PyMOL installs and renders offscreen immediately. Figure-only
+  tool, isolated from the reproducible environment (`external/pymol_render_env`,
+  not `.venv`, not the `astro` conda env) -- see the new "What exists on
+  disk" entries above and README.md for the full writeup, including two
+  real bugs found and worked around while building
+  `scripts/render_example_chain.py`:
+  - **PyMOL's `pair_fit` silently stops applying its transform past ~110
+    explicit atom-pair arguments in this build** (bisected: worked through
+    120, broke by 150; symptom is `Selector-Error: Malformed selection` on
+    stderr while `pair_fit` still returns a plausible-looking RMSD, so this
+    doesn't fail loudly). Not used for the ~180-residue matched-CA
+    superposition needed here; instead the Kabsch fit is computed once in
+    `.venv` (reusing `src.analysis.structural_metrics`'s own algorithm) and
+    applied to every atom of the AlphaFold object via one
+    `get_coords`/`load_coords` round-trip.
+  - **The AlphaFold object was left visible (cartoon shown, uncolored grey)
+    underneath the experimental object for the first two panels**, since
+    only the final "AlphaFold" panel's setup code disabled/enabled the
+    right objects. Superposed with ~2-3 A whole-chain RMSD (more at
+    flexible loops), it poked out as a stray grey/white sliver wherever the
+    two backbones diverged locally in those two panels. Fixed by disabling
+    the AlphaFold object right after both objects' cartoons are set up, not
+    just re-enabling it later for its own panel.
+  - Camera orientation: PyMOL's `orient` on the interface-residue selection
+    aligns the patch's principal axes with the screen but doesn't guarantee
+    which of the two resulting views faces the camera vs. faces away --
+    resolved with an explicit check (interface centroid vs. whole-chain
+    centroid, transformed into camera space via `get_view()`'s rotation
+    matrix, convention confirmed empirically with an occlusion test) that
+    flips 180 degrees around Y when needed.
+  - Print resolution: the composite PNG is built at `bbox_inches="tight"`
+    (~5.3in wide after cropping) but placed in the paper at `0.92\textwidth`
+    (~6.3in) -- saving at the seemingly-sufficient 300 dpi would only reach
+    ~250 effective dpi once LaTeX scales it up. Saved at 450 dpi instead
+    (~380 effective dpi at print size, confirmed by computing back from the
+    saved PNG's actual pixel width and the paper's real text width).
 - **Lean scope for Phases 6-9, decided 2026-09-17** — see `PLAN.md`
   "Scope decision" note. In scope now: Phase 6 on the primary set only
   (`eligible_homolog`), two inputs (`exp`, `af_trimmed`); Phases 7/8 on
@@ -1476,14 +1556,14 @@ apo/unbound arm's own local RMSD. Phase 10 (report generation) has not
 been formally started, though the results paper now covers most of what
 it would produce.
 
-**The results paper's structure figure (Fig. 6) still uses the matplotlib
-Calpha-trace fallback**, not a real molecular render -- no headless 3D
-renderer could be installed in this container (see "Decisions already
-made" / README.md). `paper/build_paper.py` will automatically pick up
-`paper/figures/example_chain_render.png` if it's ever dropped in from
-outside this environment; no code change needed, see README.md's
-"Substituting a rendered structure figure" for exactly what it should
-show.
+**The results paper's structure figure (Fig. 6) is now a real molecular
+render (PyMOL cartoon, not the matplotlib Calpha-trace fallback)** --
+see "Decisions already made" below and README.md's "The structure figure:
+how it was rendered, and how to reproduce it" for the tool, the isolated
+env, and the `pair_fit`/afA-visibility gotchas found while building it.
+The matplotlib fallback in `paper/build_paper.py` is untouched and still
+triggers automatically if `paper/figures/example_chain_render.png` is
+ever absent (e.g. a checkout without `external/pymol_render_env`).
 
 Open question #3 from `PLAN.md` Sec. 5 is now fully resolved for this
 project's purposes: Phase 7's own primary-endpoint alpha (0.05) is fixed

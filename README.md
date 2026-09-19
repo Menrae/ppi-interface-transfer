@@ -473,49 +473,83 @@ example-structure figure, a raster PNG -- see below) into `paper/figures/`,
 fills `paper/template.tex`'s placeholders, and compiles the PDF.
 **PDF route:** `pdflatex` (found on `PATH`; run twice for cross-references),
 checked for before falling back to a pip-installable route, per the build
-script's own preference order. **Structure figure:** `pymol-open-source` and
-plain `pymol` are not published on PyPI, and `pyvista`/VTK (also
-pip-installable) segfaults in this container with no X server, EGL, or
-OSMesa available and no root access to install them -- so
-`fig_example_structure` in `build_paper.py` falls back to a plain matplotlib
-3D rendering of the Calpha trace, colored by true-interface/predicted-probability
-value (not a rendered molecular surface), exactly as the build script's own
-docstring records.
+script's own preference order. **Structure figure:** Figure 6 is a real
+molecular render (PyMOL, cartoon representation) produced by
+`scripts/render_example_chain.py` -- see below for how it was made and how
+to reproduce or repoint it. If `paper/figures/example_chain_render.png` is
+ever absent (e.g. a fresh checkout before that script has been run),
+`fig_example_structure` in `build_paper.py` falls back automatically to a
+plain matplotlib 3D rendering of the Calpha trace, colored the same way but
+not a rendered cartoon/surface -- no code changes needed either way.
 
-#### Substituting a rendered structure figure
+#### The structure figure: how it was rendered, and how to reproduce it
 
-`build_paper.py` checks for `paper/figures/example_chain_render.png` before
-falling back to the matplotlib rendering above: if that file exists, Figure 6
-uses it as-is (no code changes needed) and the caption switches from the
-matplotlib disclaimer to a generic "externally rendered" note. To produce
-one with a real molecular renderer (PyMOL, ChimeraX, etc.):
+**Tool: PyMOL (`pymol-open-source` 3.1, via conda-forge), in its own isolated
+conda environment at `external/pymol_render_env` (gitignored, never `.venv`
+or the `astro` conda env).** Two other options were
+tried first and ruled out for this container specifically (not as a general
+judgment on either tool):
 
-1. Run `paper/build_paper.py` once (or check its most recent
-   `paper/results_paper.tex` output) to see which chain it selected --
-   the selection is seeded but data-dependent, so don't assume a
-   particular PDB ID; look for the sentence "PDB \_\_\_\_ chain \_\_\_\_,
-   UniProt \_\_\_\_" in Section 3.2 of the compiled paper, or read
-   `EX_PDB_ID`/`EX_CHAIN_ID`/`EX_UNIPROT` out of the script's console output.
-2. The figure should show, side by side, in the same orientation: (a) that
-   chain's experimental structure with its true interface residues
-   highlighted (`data/interim/interface_labels/{pdb_id}_{chain_id}.parquet`,
-   `is_interface_contact` column) against non-interface residues; (b) the
-   same experimental structure colored by PeSTo's per-residue interface
-   probability from the experimental input
-   (`data/processed/predictions/exp/{pdb_id}_{chain_id}.parquet`,
-   `pesto_interface_prob`, a continuous 0-1 colormap); (c) the AlphaFold
-   model trimmed to the same mapped residues, colored by PeSTo's
-   per-residue interface probability from the AlphaFold input
-   (`data/processed/predictions/af_trimmed/{pdb_id}_{chain_id}.parquet`,
-   joined on `uniprot_resnum`). Rendering (b) and (c) in the same camera
-   orientation (e.g. by aligning the AlphaFold model onto the experimental
-   structure first, as `build_paper.py`'s own Kabsch superposition does)
-   makes the two easy to compare directly.
-3. Save the result to `paper/figures/example_chain_render.png` (roughly
-   6.6in wide by 2.4in tall at >=150 DPI reads well at print size, but an
-   exact match isn't required).
-4. Rerun `.venv/bin/python paper/build_paper.py` -- it picks the file up
-   automatically.
+- **UCSF ChimeraX** (free for academic/non-commercial use): the Ubuntu 24.04
+  `.deb` unpacks fine with `dpkg-deb -x` (no root needed), but its `ChimeraX`
+  binary requires glibc >=2.34/2.38, newer than this container's Ubuntu
+  20.04 (glibc 2.31). The last ChimeraX release with an Ubuntu 20.04 build
+  (1.9, glibc-compatible) runs, but its offscreen rendering needs
+  `libGL.so.1`, which is not present system-wide and has no root-installable
+  path here -- resolving Mesa's own further transitive dependencies
+  (`libglx-mesa0`, a software (llvmpipe) DRI driver, a matching `libLLVM`,
+  `libdrm2`, `libsensors5`, ...) by hand-downloading individual `.deb`s
+  without `apt` was judged not worth the remaining time budget once PyMOL
+  (below) was already confirmed working.
+- **py3Dmol/NGL via headless Chromium (playwright)**: not attempted, since
+  PyMOL succeeded first.
+
+**Install** (isolated, ~1.6 GB, does not touch `.venv` or `requirements.txt`):
+
+```bash
+conda create -y -p external/pymol_render_env -c conda-forge pymol-open-source
+```
+
+**Produce the figure** (regenerates `paper/figures/example_chain_render.png`
+for a given chain; two-stage internally -- data prep runs under `.venv`,
+rendering runs under the isolated PyMOL env above, invoked as a subprocess
+-- but it's one command either way):
+
+```bash
+.venv/bin/python scripts/render_example_chain.py \
+    --pdb-id 7DZ9 --chain-id C --output paper/figures/example_chain_render.png
+```
+
+To point it at a different chain: any `{pdb_id}_{chain_id}` with Phase
+4/5/6 outputs on disk (`data/interim/residue_mappings/`,
+`data/interim/interface_labels/`, `data/processed/predictions/{exp,af_trimmed}/`)
+works. The chain `build_paper.py` currently selects is seeded but
+data-dependent -- look for "PDB \_\_\_\_ chain \_\_\_\_, UniProt \_\_\_\_" in
+Section 3.2 of the compiled paper, or `EX_PDB_ID`/`EX_CHAIN_ID` in its
+console output, before assuming a particular ID.
+
+**What the figure shows, and how:** three panels, one shared camera
+orientation. (a) the experimental structure (all Phase-5-mapped residues),
+cartoon representation, true interface residues green vs. non-interface
+grey. (b) the same experimental structure, colored by PeSTo's per-residue
+interface probability from the experimental input (viridis, 0-1, matching
+build_paper.py's own colorbar exactly -- the RGB values are computed with
+the project's own matplotlib in `.venv` and handed to PyMOL as literal
+colors, not approximated by a PyMOL palette). (c) the AlphaFold model,
+trimmed to the experimental chain's mapped UniProt range (the same
+definition `src/models/run_pesto.py` uses for the `af_trimmed` input),
+colored the same way by its own PeSTo predictions. The AlphaFold model in
+(c) is superposed onto the experimental frame with the project's existing
+Kabsch method (`src.analysis.structural_metrics.kabsch_superpose`'s
+algorithm, computed once under `.venv` over the matched CA pairs and
+applied to every atom of the AlphaFold model via a single
+`get_coords`/`load_coords` round-trip in PyMOL) -- **not** PyMOL's own
+`pair_fit` command, which was tried first and found to silently stop
+applying its transform past roughly 110 explicit atom-pair arguments in
+this PyMOL build (an internal selection-string length limit; it still
+reports a plausible-looking RMSD even when it hasn't moved anything past
+that point, so this is worth knowing if reusing `pair_fit` elsewhere on a
+chain longer than ~110 residues).
 
 ## 7. Deviations from the original proposal
 
