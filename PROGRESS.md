@@ -189,6 +189,11 @@ pre-specified. Headline results:
 - **Not done (future work):** a minimum resolved-length filter, because it
   changes the pre-specified dataset.
 
+In the paper, these are collected in one section, "§3.4 Post-hoc checks
+added after review". The paired F1 bootstrap is the exception: it stays in
+§3.3 with the filtering analysis it tests. The main text keeps only
+one-line pointers to §3.4.
+
 `fit_shift_regression` gained an `outcome` argument and an `r_squared`
 column. Defaults are unchanged, so Phase 8 outputs are unaffected.
 `results/error_analysis/regression.csv` predates the new column; it has not

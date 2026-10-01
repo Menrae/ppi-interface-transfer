@@ -324,8 +324,9 @@ below, before any error-analysis feature was computed.
 \textbf{Post-hoc analyses added after review.} Five further analyses were
 chosen after all of the above results were known, in response to peer
 review (code: \texttt{src/analysis/posthoc\_review.py}). They are
-exploratory, are labeled ``post-hoc'' wherever they appear, and do not
-replace any pre-specified result. (1) \emph{Template window:} each chain's
+exploratory, are reported together in Section~\ref{sec:review} (except the
+paired F1 bootstrap, reported with the filtering analysis it tests), and do
+not replace any pre-specified result. (1) \emph{Template window:} each chain's
 PDB release date was compared with its AlphaFold DB model's creation date,
 and the primary endpoint repeated on the chains released on or after that
 date, which cannot have served as templates for their own models. (2)
@@ -419,21 +420,10 @@ noticeably larger than the per-chain median gap; Section~\ref{sec:error}
 returns to this. Replacing the distance-based interface label with the
 buried-surface-area label gives essentially the same result (median
 0.026, CI [0.020, 0.034], $p < 10^{-10}$), so the finding is not
-an artifact of the distance-cutoff label definition.
+an artifact of the distance-cutoff label definition. The gap also persists
+among chains that cannot have served as templates for their own AlphaFold
+models (post-hoc, Section~\ref{sec:review}).
 
-A post-hoc check addressed whether AlphaFold DB could have used a chain's own
-experimental structure as a template. 334 of the 566
-chains were released before their AlphaFold model was generated, so they
-could in principle have been templates for it. This is an upper bound,
-because the template database predates the model. The remaining
-232 chains cannot have been. Among those (229 with
-defined metrics), the median paired AUPR difference was 0.032
-(95\% CI [0.020, 0.047], $p = 6.6\times10^{-8}$), versus 0.022
-(CI [0.016, 0.033], $p = 1.6\times10^{-10}$) among the 325 that could have been. The
-gap is therefore present without any possibility of self-templating. Its
-point estimate is larger in that subgroup, consistent with self-templating
-narrowing the gap where it was possible, but the two subgroups were not
-formally compared.
 
 \begin{figure}[t]
 \centering
@@ -536,34 +526,16 @@ predictions for more exposed residues change more between inputs. No
 predictor's variance inflation factor exceeded 5 (maximum
 1.64): although both are proxies for AlphaFold-vs-experimental
 divergence, pLDDT and local RMSD are only mildly collinear here and each
-retains independent explanatory power. Binned by local-RMSD decile, the mean
+retains independent explanatory power. The shift measures how much a
+prediction moves between inputs, not whether it moves toward or away from
+the true label, and the regression explains only a small part of its
+variance ($R^2 = 0.093$); Section~\ref{sec:review} refits the same
+design on the signed error. Binned by local-RMSD decile, the mean
 absolute prediction shift changes little across the lowest deciles and
 rises over the upper ones, most steeply in the top decile
-(Fig.~\ref{fig:regression}a). Nearly all residues with extreme local RMSD
-(798 of the 805 residues above 10\,\r{A},
-in 28 of 29 chains) belong to geometrically
-flagged chains, 16 of which were mapped by SIFTS with
-100\% sequence identity to the AlphaFold model. This makes residue-register
-errors an unlikely explanation for most of them, though it does not rule
-them out for individual chains.
+(Fig.~\ref{fig:regression}a).
 
-The shift measures how much a prediction moves between inputs, not whether
-it moves toward or away from the true label, and the pre-specified
-regression explains only a small part of its variance ($R^2 =
-0.093$). A post-hoc refit with the signed error
-$|p_{\mathrm{AF}} - y| - |p_{\mathrm{exp}} - y|$ as the outcome
-(Table~\ref{tab:regcompare}) separates the two. On average AlphaFold-input
-predictions are slightly further from the true label (mean
-0.018, CI [0.013, 0.024]; further for 53\% of
-residues). Lower pLDDT (coefficient -0.0145, $p = 7.1\times10^{-5}$)
-and higher local RMSD (0.0233, $p = 8.2\times10^{-5}$) are both
-associated with AlphaFold input being further from the truth, not merely
-with a change. Solvent exposure, the strongest correlate of the shift, is not
-associated with the signed error (-0.0012, $p = 0.473$).
-Exposed residues' predictions move more between inputs, but not
-systematically in the wrong direction. This model's $R^2$ is lower still
-(0.024): these covariates identify where errors concentrate, not most of
-the residue-level variation.
+
 
 
 
@@ -599,31 +571,7 @@ Reference category: secondary structure = coil.}
 \label{tab:regression}
 \end{table}
 
-\begin{table}[t]
-\centering
-\small
-\begin{tabular}{lrrlrrl}
-\toprule
- & \multicolumn{3}{c}{Shift $|p_{\mathrm{AF}}-p_{\mathrm{exp}}|$} & \multicolumn{3}{c}{Signed error $|p_{\mathrm{AF}}-y|-|p_{\mathrm{exp}}-y|$} \\
-\cmidrule(lr){2-4}\cmidrule(lr){5-7}
-Term & Coef. & $t$ & $p$ & Coef. & $t$ & $p$ \\
-\midrule
-Intercept & 0.1019 & 35.2 & $< 10^{-10}$ & 0.0160 & 7.0 & $< 10^{-10}$ \\
-pLDDT (z) & -0.0268 & -8.1 & $< 10^{-10}$ & -0.0145 & -4.0 & $7.1\times10^{-5}$ \\
-Local RMSD (z) & 0.0268 & 6.1 & $1.4\times10^{-9}$ & 0.0233 & 3.9 & $8.2\times10^{-5}$ \\
-RSA (z) & 0.0254 & 16.0 & $< 10^{-10}$ & -0.0012 & -0.7 & $0.473$ \\
-Helix vs. coil & 0.0115 & 3.3 & $9.8\times10^{-4}$ & 0.0048 & 1.4 & $0.161$ \\
-Strand vs. coil & 0.0073 & 1.7 & $0.081$ & 0.0036 & 0.9 & $0.363$ \\
-\midrule
-$R^2$ & \multicolumn{3}{l}{0.093} & \multicolumn{3}{l}{0.024} \\
-\bottomrule
-\end{tabular}
-\caption{Post-hoc. The regression design of Table~\ref{tab:regression}
-(same 95,117 residues, cluster-robust standard errors by chain) with the
-pre-specified outcome (left) and the signed error (right; positive when the
-AlphaFold-input prediction is further from the true label $y$).}
-\label{tab:regcompare}
-\end{table}
+
 
 Two pre-specified descriptive analyses addressed possible confounds. First,
 per-chain AUPR drop showed no meaningful association with chain length
@@ -634,20 +582,11 @@ median gap (0.027). The drop distribution is instead
 right-skewed (unweighted mean 0.061 vs.\ median
 0.027), and weighting the mean by chain length barely
 moves it (0.061). A minority of chains with unusually large
-drops pull the mean above the median; long chains in general do not. Two post-hoc checks (Section~\ref{sec:prespec}) apportion the rest of the
-pooled-vs.-median difference. Removing the 55 chains
-(10\%) with the largest per-chain drops roughly halves the pooled
-gap, from 0.070 (CI [0.051, 0.091]) to 0.039 (CI
-[0.024, 0.054]). That remainder still exceeds the remaining chains' mean
-per-chain drop (0.013). Replacing each chain's scores by their
-within-chain ranks, which removes differences in score calibration between
-chains, leaves a pooled gap of 0.055 (CI [0.039, 0.072]). Rank-based
-pooled AUPR is on a different scale from the raw one, so this does not
-measure a calibration share. It does show that the pooled gap is not mainly
-a calibration artifact: it persists when only within-chain rankings are
-compared. The large pooled gap is thus driven substantially, but not
-entirely, by the right tail of per-chain drops. (Removing chains selected
-on their drop is a diagnostic, not an unbiased estimate.) Second, the 92 geometrically flagged chains differ from
+drops pull the mean above the median; long chains in general do not
+(Section~\ref{sec:review} examines how much of the pooled-vs.-median
+difference this tail accounts for).
+
+Second, the 92 geometrically flagged chains differ from
 the remaining 462 on every measure in Table~\ref{tab:flagged}
 except interface fraction. Their larger global C$\alpha$ distances follow
 from how the flag is defined, and their larger local RMSD ($p < 10^{-10}$) is closely related.
@@ -657,14 +596,8 @@ confidence: flagged chains have substantially lower mean pLDDT
 AlphaFold-vs-experimental divergence rather than a mapping artifact, though
 it does not rule out the latter for individual chains. Flagged chains are
 also longer, consistent with (but not evidence for) domain rearrangement in
-multi-domain chains. A post-hoc audit of their residue mappings found them
-only slightly less clean than the unflagged chains. 7 of
-92 flagged chains used the fallback alignment, versus
-19 of 462 unflagged chains;
-24 versus 73 had at least one sequence mismatch.
-Mean mapped identity was 99.6\% versus 99.8\%
-(Mann--Whitney $p = 0.024$). Mapping problems may contribute for a few
-flagged chains but do not characterize the group.
+multi-domain chains. A post-hoc audit of their residue mappings is in
+Section~\ref{sec:review}.
 
 \begin{table}[t]
 \centering
@@ -741,7 +674,7 @@ true interface residues, while moving AlphaFold-input F1 from
 0.596 (CI [0.571, 0.621]) to 0.603 (CI
 [0.573, 0.633]), an absolute gain of 0.007.
 Because the two F1 values are computed on nested, correlated residue sets,
-their marginal CIs cannot be compared directly; a post-hoc paired bootstrap
+their marginal CIs cannot be compared directly; a paired bootstrap added after review
 (both cutoffs evaluated on the same resampled chains) gives a 95\% CI of
 [-0.011, 0.024] for this gain, which includes zero. The
 experimental-vs.-AlphaFold F1 gap does narrow, from 0.050 without
@@ -799,6 +732,104 @@ inputs, with 95\% chain-resampled bootstrap CIs. Post-hoc, exploratory
 \label{tab:filtering}
 \end{table}
 
+\subsection{Post-hoc checks added after review (exploratory)}
+\label{sec:review}
+
+The checks in this subsection were chosen after every result above was known,
+in response to peer review (Section~\ref{sec:prespec}). They test the
+robustness and interpretation of the pre-specified results and do not
+replace them. The paired bootstrap for the filtering analysis, added for the
+same reason, is reported with that analysis in Section~\ref{sec:filtering}.
+
+\textbf{Self-templating.} Could AlphaFold DB have used a chain's own
+experimental structure as a template? 334 of the 566
+chains were released before their AlphaFold model was generated, so they
+could in principle have been templates for it. This is an upper bound,
+because the template database predates the model. The remaining
+232 chains cannot have been. Among those (229 with
+defined metrics), the median paired AUPR difference was 0.032
+(95\% CI [0.020, 0.047], $p = 6.6\times10^{-8}$), versus 0.022
+(CI [0.016, 0.033], $p = 1.6\times10^{-10}$) among the 325 that could have been. The
+gap is therefore present without any possibility of self-templating. Its
+point estimate is larger in that subgroup, consistent with self-templating
+narrowing the gap where it was possible, but the two subgroups were not
+formally compared.
+
+\textbf{Shift vs.\ error.} A refit of the Section~\ref{sec:error}
+regression design with the signed error
+$|p_{\mathrm{AF}} - y| - |p_{\mathrm{exp}} - y|$ as the outcome
+(Table~\ref{tab:regcompare}) separates how much a prediction moves from
+whether it moves away from the truth. On average AlphaFold-input
+predictions are slightly further from the true label (mean
+0.018, CI [0.013, 0.024]; further for 53\% of
+residues). Lower pLDDT (coefficient -0.0145, $p = 7.1\times10^{-5}$)
+and higher local RMSD (0.0233, $p = 8.2\times10^{-5}$) are both
+associated with AlphaFold input being further from the truth, not merely
+with a change. Solvent exposure, the strongest correlate of the shift, is not
+associated with the signed error (-0.0012, $p = 0.473$).
+Exposed residues' predictions move more between inputs, but not
+systematically in the wrong direction. This model's $R^2$ is lower still
+(0.024): these covariates identify where errors concentrate, not most of
+the residue-level variation.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrlrrl}
+\toprule
+ & \multicolumn{3}{c}{Shift $|p_{\mathrm{AF}}-p_{\mathrm{exp}}|$} & \multicolumn{3}{c}{Signed error $|p_{\mathrm{AF}}-y|-|p_{\mathrm{exp}}-y|$} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Term & Coef. & $t$ & $p$ & Coef. & $t$ & $p$ \\
+\midrule
+Intercept & 0.1019 & 35.2 & $< 10^{-10}$ & 0.0160 & 7.0 & $< 10^{-10}$ \\
+pLDDT (z) & -0.0268 & -8.1 & $< 10^{-10}$ & -0.0145 & -4.0 & $7.1\times10^{-5}$ \\
+Local RMSD (z) & 0.0268 & 6.1 & $1.4\times10^{-9}$ & 0.0233 & 3.9 & $8.2\times10^{-5}$ \\
+RSA (z) & 0.0254 & 16.0 & $< 10^{-10}$ & -0.0012 & -0.7 & $0.473$ \\
+Helix vs. coil & 0.0115 & 3.3 & $9.8\times10^{-4}$ & 0.0048 & 1.4 & $0.161$ \\
+Strand vs. coil & 0.0073 & 1.7 & $0.081$ & 0.0036 & 0.9 & $0.363$ \\
+\midrule
+$R^2$ & \multicolumn{3}{l}{0.093} & \multicolumn{3}{l}{0.024} \\
+\bottomrule
+\end{tabular}
+\caption{Post-hoc. The regression design of Table~\ref{tab:regression}
+(same 95,117 residues, cluster-robust standard errors by chain) with the
+pre-specified outcome (left) and the signed error (right; positive when the
+AlphaFold-input prediction is further from the true label $y$).}
+\label{tab:regcompare}
+\end{table}
+
+\textbf{Pooled vs.\ per-chain gap.} Two checks apportion the
+pooled-vs.-median difference left unexplained by chain length. Removing the 55 chains
+(10\%) with the largest per-chain drops roughly halves the pooled
+gap, from 0.070 (CI [0.051, 0.091]) to 0.039 (CI
+[0.024, 0.054]). That remainder still exceeds the remaining chains' mean
+per-chain drop (0.013). Replacing each chain's scores by their
+within-chain ranks, which removes differences in score calibration between
+chains, leaves a pooled gap of 0.055 (CI [0.039, 0.072]). Rank-based
+pooled AUPR is on a different scale from the raw one, so this does not
+measure a calibration share. It does show that the pooled gap is not mainly
+a calibration artifact: it persists when only within-chain rankings are
+compared. The large pooled gap is thus driven substantially, but not
+entirely, by the right tail of per-chain drops. (Removing chains selected
+on their drop is a diagnostic, not an unbiased estimate.)
+
+\textbf{Flagged chains and extreme local RMSD.} The residue mappings of
+the geometrically flagged chains are only slightly less clean than those
+of the unflagged chains. 7 of
+92 flagged chains used the fallback alignment, versus
+19 of 462 unflagged chains;
+24 versus 73 had at least one sequence mismatch.
+Mean mapped identity was 99.6\% versus 99.8\%
+(Mann--Whitney $p = 0.024$). Mapping problems may contribute for a few
+flagged chains but do not characterize the group. Nearly all residues with extreme local RMSD in
+Fig.~\ref{fig:regression}a
+(798 of the 805 residues above 10\,\r{A},
+in 28 of 29 chains) belong to geometrically
+flagged chains, 16 of which were mapped by SIFTS with
+100\% sequence identity to the AlphaFold model. This makes residue-register
+errors an unlikely explanation for most of them, though it does not rule
+them out for individual chains.
+
 \section{Discussion}
 
 In practical terms, PeSTo's accuracy cost from using an AlphaFold structure
@@ -809,11 +840,11 @@ effect, not a collapse in accuracy, and Fig.~\ref{fig:phase7primary}a shows
 most chains clustering close to the identity line, with AlphaFold input
 actually scoring higher for 32\% of chains. The pooled-residue
 comparison (0.739 vs.\ 0.669) suggests a larger
-gap. Post-hoc checks attribute much of that difference to a right-skewed
+gap. Post-hoc checks (Section~\ref{sec:review}) attribute much of that difference to a right-skewed
 minority of chains with large drops: removing the 10\% with the
 largest drops roughly halves it. The remainder reflects pooled AUPR ranking
 residues from all chains together, rather than averaging per-chain values
-(Section~\ref{sec:error}).
+(Section~\ref{sec:review}).
 Reporting the per-chain median alongside the pooled number avoids
 overstating the typical case.
 
@@ -834,7 +865,7 @@ pattern: the per-residue cost is largest where AlphaFold itself reports low
 confidence and where the local backbone geometry diverges from the
 experimental structure, and these two signals carry partly independent
 information (low collinearity despite both tracking the same underlying
-divergence). A post-hoc refit on the signed error shows that both signals
+divergence). A post-hoc refit on the signed error (Section~\ref{sec:review}) shows that both signals
 also mark where AlphaFold-input predictions move \emph{away} from the true
 label, not merely where they change. Solvent exposure is the strongest
 correlate of how much a prediction changes, which is unsurprising for a
@@ -864,7 +895,7 @@ released before its model was generated could have served as a template for
 that model. That would make the AlphaFold input more similar to the
 experimental structure and bias the measured gap toward zero. The exact
 template cutoff is not recorded in the cached metadata. The post-hoc check
-in Section~\ref{sec:benchmark} shows the gap is present among the
+in Section~\ref{sec:review} shows the gap is present among the
 232 chains released after their model was generated, which rules
 out self-templating for that subgroup, but not templating on earlier close
 homologs.
@@ -900,7 +931,7 @@ run.
 \item \textbf{Shift rather than error.} The pre-specified regression
 outcome $|p_{\mathrm{AF}} - p_{\mathrm{exp}}|$ measures how much a
 residue's prediction changes between inputs, not whether the AlphaFold-input
-prediction is worse. The signed-error refit that addresses this is post-hoc,
+prediction is worse. The signed-error refit that addresses this (Section~\ref{sec:review}) is post-hoc,
 and both models have low $R^2$.
 \item \textbf{Deferred comparisons.} The untrimmed, full-length AlphaFold
 model (as opposed to the same model trimmed to the experimentally observed
@@ -973,9 +1004,9 @@ and Crossref.
 \end{itemize}
 A separate Claude instance, given only the compiled PDF, also produced a
 critical review of an earlier draft. Its points were checked against the
-repository before being accepted, disputed, or acted on. The post-hoc
-analyses in this paper (Section~\ref{sec:prespec}) originated from that
-review.
+repository before being accepted, disputed, or acted on. The
+analyses in Section~\ref{sec:review}, and the paired bootstrap in
+Section~\ref{sec:filtering}, originated from that review.
 
 Several safeguards limit the risk of AI-introduced errors. Every number in
 the paper is generated by a script from the pipeline's own outputs rather
