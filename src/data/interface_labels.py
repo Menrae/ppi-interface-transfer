@@ -415,8 +415,8 @@ def compute_sasa_labels(residues: dict, ordered_keys: list, partner_atoms: list,
 
     rsa is NaN (logged, not silently produced) when the residue's chemical
     component doesn't resolve to one of the 20 standard amino acids via
-    gemmi's CCD (e.g. a non-canonical residue lacking a Sander/Rost max-ASA
-    reference value) -- delta_sasa/is_interface_sasa are unaffected, only
+    gemmi's CCD (e.g. a non-canonical residue lacking a max-ASA reference
+    value in MAX_SASA_ANGSTROM2, Tien et al. 2013) -- delta_sasa/is_interface_sasa are unaffected, only
     the RSA denominator is undefined.
     """
     rep_atom_lists = [residues[k].atoms for k in ordered_keys]

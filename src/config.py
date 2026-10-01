@@ -65,9 +65,10 @@ MIN_CHAIN_LENGTH = 40
 # entries to avoid redundancy/leakage.
 SEQUENCE_IDENTITY_CUTOFF = 0.30
 
-# Minimum alignment coverage (of the shorter sequence) required for an
-# MMseqs2 hit to count, both for candidate redundancy clustering and for
-# the PeSTo-overlap homology search. Guards against short local matches
+# Minimum alignment coverage required for an MMseqs2 hit to count, both for
+# candidate redundancy clustering and for the PeSTo-overlap homology search.
+# Passed with --cov-mode 0, i.e. the alignment must cover at least this
+# fraction of BOTH query and target (not just the shorter sequence). Guards against short local matches
 # (e.g. a shared domain) being treated as full-chain redundancy/leakage.
 CLUSTER_MIN_COVERAGE = 0.8
 
@@ -136,6 +137,18 @@ MIN_MAPPED_COVERAGE = 0.80
 # mutations while still catching frame-shift-scale misalignment, which
 # typically produces near-zero identity, not a borderline value.
 RESIDUE_MAPPING_VALIDATION_IDENTITY = 0.90
+
+# Geometric validation of the Phase 4 mapping
+# (scripts/validate_mapping_geometry.py; reused as Phase 7's "geometrically
+# flagged" stratum and Phase 8's flagged-chain comparison): one global
+# Kabsch superposition of the experimental chain's Calpha atoms onto the
+# AlphaFold model's at the same UniProt positions; a chain is flagged if at
+# least GEOMETRIC_FLAG_MIN_RUN_LENGTH consecutive mapped residues (in
+# UniProt order) all lie more than GEOMETRIC_FLAG_FAR_DISTANCE_ANGSTROM
+# apart after that fit. Moved here unchanged from the script/benchmark.py
+# where they were previously hardcoded.
+GEOMETRIC_FLAG_FAR_DISTANCE_ANGSTROM = 10.0
+GEOMETRIC_FLAG_MIN_RUN_LENGTH = 5
 
 # --- Phase 5: ground-truth interface labels ------------------------------
 
@@ -277,3 +290,11 @@ PLDDT_FILTER_PREDICTION_THRESHOLD = 0.5
 # pLDDT >= cutoff. 0 (keep everything, the no-filtering baseline) plus
 # AlphaFold's own three confidence-band edges (PLDDT_BANDS).
 PLDDT_FILTER_CUTOFFS = (0,) + PLDDT_BANDS
+
+# --- Results paper (paper/build_paper.py) reporting conventions -------------
+
+# p-values below this are reported as a bound ("p < 1e-10") rather than a
+# point value: with ~550 chains / cluster-robust SEs, the far tail of the
+# reference distribution isn't trustworthy to many orders of magnitude, so
+# e.g. "p = 1.4e-57" overstates the precision of the approximation.
+P_VALUE_REPORTING_FLOOR = 1e-10

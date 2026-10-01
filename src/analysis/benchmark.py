@@ -42,7 +42,7 @@ PER_CHAIN_METRICS_PATH = BENCHMARK_DIR / "per_chain_metrics.csv"
 SUMMARY_PATH = BENCHMARK_DIR / "summary.csv"
 
 INPUTS = ("exp", "af_trimmed")
-GEOMETRIC_FLAG_MIN_RUN = 5  # same rule as scripts/validate_mapping_geometry.py's MIN_FLAGGED_RUN_LENGTH
+GEOMETRIC_FLAG_MIN_RUN = config.GEOMETRIC_FLAG_MIN_RUN_LENGTH  # same rule as scripts/validate_mapping_geometry.py
 
 # Validated categorical palette slots 1/2 (dataviz skill reference palette),
 # used in this fixed order everywhere exp/af_trimmed are plotted together.

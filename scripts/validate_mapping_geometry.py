@@ -48,8 +48,8 @@ OUTPUT_PATH = config.INTERIM_DATA_DIR / "phase4_geometric_validation.csv"
 # auth_seq_id) all beyond FAR_DISTANCE_ANGSTROM after superposition is
 # flagged as a likely mapping/register problem rather than ordinary local
 # flexibility (which is usually isolated single residues or short loops).
-FAR_DISTANCE_ANGSTROM = 10.0
-MIN_FLAGGED_RUN_LENGTH = 5
+FAR_DISTANCE_ANGSTROM = config.GEOMETRIC_FLAG_FAR_DISTANCE_ANGSTROM
+MIN_FLAGGED_RUN_LENGTH = config.GEOMETRIC_FLAG_MIN_RUN_LENGTH
 
 
 def get_ca_coords(cif_path: Path, chain_id: str | None, key_type: str, keys: list) -> dict:
