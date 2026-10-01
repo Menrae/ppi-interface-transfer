@@ -298,3 +298,22 @@ PLDDT_FILTER_CUTOFFS = (0,) + PLDDT_BANDS
 # reference distribution isn't trustworthy to many orders of magnitude, so
 # e.g. "p = 1.4e-57" overstates the precision of the approximation.
 P_VALUE_REPORTING_FLOOR = 1e-10
+
+# --- Post-hoc review analyses (src.analysis.posthoc_review) -----------------
+# Added after peer review (2026-10-01), after every pre-specified result was
+# known: exploratory, NOT part of any pre-specified plan. Bootstraps reuse
+# PHASE8_BOOTSTRAP_SEED with BOOTSTRAP_N_RESAMPLES (cheap per-chain scalars)
+# or PHASE8_BAND_BOOTSTRAP_N_RESAMPLES (pooled metrics recomputed per draw),
+# the same split as Phase 8.
+
+# Fraction of scoreable chains with the largest per-chain AUPR drop removed
+# before recomputing pooled AUPR, to test whether the pooled-vs-median gap
+# is carried by the right tail of per-chain drops. 0.10 is the value the
+# reviewer suggested ("top ~10%"), not tuned.
+POSTHOC_TOP_DROP_FRACTION = 0.10
+
+# Local-RMSD value (Angstrom) above which residues are listed, per chain, in
+# the post-hoc audit of extreme local divergence (possible mapping errors).
+# Same value as GEOMETRIC_FLAG_FAR_DISTANCE_ANGSTROM, for a consistent
+# notion of "far".
+POSTHOC_LOCAL_RMSD_AUDIT_ANGSTROM = 10.0

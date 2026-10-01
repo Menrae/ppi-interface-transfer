@@ -449,6 +449,13 @@ disk, and only the first run pays the full network cost.
 # results/figures/error_analysis_plddt_filtering.png)
 .venv/bin/python -m src.analysis.plddt_filtering
 
+# Post-hoc review analyses (exploratory, added 2026-10-01 after peer review;
+# not part of any pre-specified plan) -- template window, signed-error
+# regression, paired F1 bootstrap, pooled-vs-median checks, flag audit.
+# LOCAL ONLY (reads cached AlphaFold DB API metadata), ~2 minutes
+# (writes results/posthoc/*.csv). Required by paper/build_paper.py.
+.venv/bin/python -m src.analysis.posthoc_review
+
 # Results paper -- LOCAL ONLY, well under a minute (matplotlib figure
 # generation + two pdflatex passes)
 # (writes paper/results_paper.pdf, paper/figures/*)

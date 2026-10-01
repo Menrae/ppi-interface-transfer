@@ -279,13 +279,17 @@ def build_regression_frame(features: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     return df, {"n_total": n_total, "n_dropped_missing": n_dropped}
 
 
-def fit_shift_regression(df: pd.DataFrame) -> pd.DataFrame:
+def fit_shift_regression(df: pd.DataFrame, outcome: str = "prob_shift") -> pd.DataFrame:
     """OLS of |p_af_trimmed - p_exp| on standardized pLDDT/local RMSD/RSA
     plus secondary-structure dummies (coil reference), with cluster-robust
     (CRV1) standard errors clustered by chain. Reports coefficients, SEs,
-    p-values, and VIF per predictor (flagged if > config.VIF_COLLINEARITY_THRESHOLD).
+    p-values, R^2, and VIF per predictor (flagged if > config.VIF_COLLINEARITY_THRESHOLD).
+
+    `outcome` defaults to the pre-registered prob_shift; the post-hoc
+    review analyses (src.analysis.posthoc_review) reuse the identical
+    design with a different outcome column.
     """
-    y = df["prob_shift"].astype(float).to_numpy()
+    y = df[outcome].astype(float).to_numpy()
 
     predictors = pd.DataFrame(index=df.index)
     for col in REGRESSION_PREDICTORS:
@@ -324,6 +328,8 @@ def fit_shift_regression(df: pd.DataFrame) -> pd.DataFrame:
             "n": len(df),
             "n_clusters": int(pd.unique(groups).shape[0]),
             "reference_category": f"secondary_structure={SSE_REFERENCE_CATEGORY}",
+            "outcome": outcome,
+            "r_squared": float(model.rsquared),
         })
     return pd.DataFrame(rows)
 

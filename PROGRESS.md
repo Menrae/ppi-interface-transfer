@@ -162,6 +162,38 @@ it (none), and simulated a clean checkout by moving
 text intact) and the full `pytest` suite (170 passed) still succeed
 without it.
 
+## Paper revision after review 1 (2026-10-01)
+
+Branch `paper-revision-review1`. A PDF-only review was triaged item by item.
+Text/Methods fixes were applied, with every value read from the repo. The
+paper now says "pre-specified", not "pre-registered": the detailed
+Phase 7/8/8b plans were committed in the same commits as their results.
+Five **post-hoc, exploratory** analyses were added in
+`src/analysis/posthoc_review.py` (tests: `tests/test_posthoc_review.py`;
+outputs: `results/posthoc/`; constants under "Post-hoc review analyses" in
+`config.py`). They are NOT recorded in PLAN.md, by design: they are not
+pre-specified. Headline results:
+- **Template window:** 334/566 chains were released before their AFDB model
+  was created. The 229 scoreable chains released after it still show the
+  gap (median 0.032, CI [0.020, 0.047]).
+- **Signed error** |p_AF−y|−|p_exp−y|: pLDDT and local RMSD are associated
+  with it; RSA is not (p=0.47). R² is 0.093 for the shift model and 0.024
+  for the error model.
+- **Paired F1 bootstrap:** the AF-input F1 gain from filtering has CI
+  [−0.011, 0.024] (n.s.). The gap narrowing has CI [−0.031, −0.008]
+  (real, mostly from exp F1 falling).
+- **Pooled vs. median:** dropping the top-10% drop chains takes the pooled
+  gap from 0.070 to 0.039. The within-chain-rank pooled gap is 0.055.
+- **Flag audit:** 798/805 residues with local RMSD >10 Å are in flagged
+  chains, mostly SIFTS-mapped at 100% identity.
+- **Not done (future work):** a minimum resolved-length filter, because it
+  changes the pre-specified dataset.
+
+`fit_shift_regression` gained an `outcome` argument and an `r_squared`
+column. Defaults are unchanged, so Phase 8 outputs are unaffected.
+`results/error_analysis/regression.csv` predates the new column; it has not
+been rerun.
+
 ## What exists on disk right now
 
 - `README.md`, `CLAUDE.md` — project description and dev conventions
