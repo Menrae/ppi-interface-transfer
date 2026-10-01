@@ -343,7 +343,6 @@ def _compose_figure(panel_paths: dict, meta_path: Path, output_path: Path) -> No
     for key, ax in zip("abc", axes):
         img = np.array(Image.open(panel_paths[key]).convert("RGB"))
         ax.imshow(img)
-        ax.set_title(titles[key], fontsize=8.5 if key == "a" else 8)
         ax.axis("off")
 
     fig.subplots_adjust(wspace=0.05)
@@ -352,6 +351,15 @@ def _compose_figure(panel_paths: dict, meta_path: Path, output_path: Path) -> No
     cbar = fig.colorbar(sm, ax=[axes[1], axes[2]], shrink=0.62, pad=0.03, label="Interface probability")
     cbar.ax.tick_params(labelsize=7)
     cbar.set_label("Interface probability", fontsize=7.5)
+
+    # Panel titles on one shared baseline, one font size: with imshow's
+    # equal aspect the three axes end up different heights, so per-axes
+    # set_title would put each title at a different height.
+    fig.canvas.draw()
+    top = max(ax.get_position().y1 for ax in axes)
+    for key, ax in zip("abc", axes):
+        pos = ax.get_position()
+        fig.text((pos.x0 + pos.x1) / 2, top + 0.02, titles[key], ha="center", va="bottom", fontsize=8)
 
     true_patch = mpatches.Patch(color=GREEN, label="True interface residue")
     non_patch = mpatches.Patch(color=NON_INTERFACE_GREY, label="Non-interface residue")
