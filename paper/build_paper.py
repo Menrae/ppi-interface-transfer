@@ -853,6 +853,104 @@ def load_provenance() -> dict:
     return {"ctx": prov, "primary_labels": primary, "release": merged}
 
 
+POSTHOC_DIR = config.RESULTS_DIR / "posthoc"
+
+
+def load_posthoc() -> dict:
+    return {
+        "template": pd.read_csv(POSTHOC_DIR / "template_window.csv").set_index("template_window"),
+        "regression": pd.read_csv(POSTHOC_DIR / "signed_error_regression.csv"),
+        "error_summary": pd.read_csv(POSTHOC_DIR / "signed_error_summary.csv").iloc[0],
+        "paired_f1": pd.read_csv(POSTHOC_DIR / "paired_f1_bootstrap.csv").set_index("statistic"),
+        "pooled": pd.read_csv(POSTHOC_DIR / "pooled_vs_median.csv").set_index("variant"),
+        "flag_audit": pd.read_csv(POSTHOC_DIR / "flag_mapping_audit.csv").set_index("group"),
+        "extreme": pd.read_csv(POSTHOC_DIR / "extreme_local_rmsd_chains.csv"),
+    }
+
+
+def table_regression_comparison(regression: pd.DataFrame) -> str:
+    """Same design, two outcomes: the pre-specified |p_AF - p_exp| and the
+    post-hoc signed error |p_AF - y| - |p_exp - y|."""
+    disp = {"const": "Intercept", **REG_TERM_DISPLAY}
+    shift = regression[regression["outcome"] == "prob_shift"].set_index("term")
+    err = regression[regression["outcome"] == "error_delta"].set_index("term")
+    lines = [r"\begin{tabular}{lrrlrrl}", r"\toprule",
+             r" & \multicolumn{3}{c}{Shift $|p_{\mathrm{AF}}-p_{\mathrm{exp}}|$} & "
+             r"\multicolumn{3}{c}{Signed error $|p_{\mathrm{AF}}-y|-|p_{\mathrm{exp}}-y|$} \\",
+             r"\cmidrule(lr){2-4}\cmidrule(lr){5-7}",
+             r"Term & Coef. & $t$ & $p$ & Coef. & $t$ & $p$ \\", r"\midrule"]
+    for term in shift.index:
+        s, e = shift.loc[term], err.loc[term]
+        lines.append(rf"{disp.get(term, term)} & {s['coef']:.4f} & {s['t']:.1f} & {fmt_p_dollars(s['p_value'])} & "
+                     rf"{e['coef']:.4f} & {e['t']:.1f} & {fmt_p_dollars(e['p_value'])} \\")
+    lines.append(r"\midrule")
+    lines.append(rf"$R^2$ & \multicolumn{{3}}{{l}}{{{shift['r_squared'].iloc[0]:.3f}}} & "
+                 rf"\multicolumn{{3}}{{l}}{{{err['r_squared'].iloc[0]:.3f}}} \\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    return "\n".join(lines)
+
+
+def posthoc_context(ph: dict, regression_n: int) -> dict:
+    ctx = {}
+    t = ph["template"]
+    for key, row in (("TW_BEFORE", "could_be_template"), ("TW_AFTER", "after_model")):
+        r = t.loc[row]
+        ctx.update({f"{key}_N": fmt_n(r["n_chains"]), f"{key}_NS": fmt_n(r["n_scoreable"]),
+                    f"{key}_MEDIAN": f"{r['median_diff']:.3f}", f"{key}_CI": fmt_ci(r["ci_lo"], r["ci_hi"]),
+                    f"{key}_P": fmt_p(r["p_value"])})
+    assert int(t.loc["unknown", "n_chains"]) == 0
+
+    reg = ph["regression"]
+    shift = reg[reg["outcome"] == "prob_shift"].set_index("term")
+    err = reg[reg["outcome"] == "error_delta"].set_index("term")
+    assert int(shift["n"].iloc[0]) == regression_n  # same residues as the pre-specified fit
+    es = ph["error_summary"]
+    ctx.update({
+        "REG_COMPARISON_TABLE": table_regression_comparison(reg),
+        "SHIFT_R2": f"{shift['r_squared'].iloc[0]:.3f}", "ERR_R2": f"{err['r_squared'].iloc[0]:.3f}",
+        "ERR_PLDDT_COEF": f"{err.loc['plddt_z', 'coef']:.4f}", "ERR_PLDDT_P": fmt_p(err.loc["plddt_z", "p_value"]),
+        "ERR_RMSD_COEF": f"{err.loc['local_rmsd_z', 'coef']:.4f}", "ERR_RMSD_P": fmt_p(err.loc["local_rmsd_z", "p_value"]),
+        "ERR_RSA_COEF": f"{err.loc['rsa_z', 'coef']:.4f}", "ERR_RSA_P": fmt_p(err.loc["rsa_z", "p_value"]),
+        "ERR_MEAN": f"{es['mean_error_delta']:.3f}", "ERR_MEAN_CI": fmt_ci(es["ci_lo"], es["ci_hi"]),
+        "ERR_FRAC_WORSE": fmt_pct(es["frac_af_worse"], 0),
+    })
+
+    pf_ = ph["paired_f1"]
+    for key, stat in (("PF_AF_GAIN", "af_gain"), ("PF_EXP_CHANGE", "exp_change"), ("PF_GAP_CHANGE", "gap_change")):
+        if key == "PF_GAP_CHANGE":  # the other two point values are already FILTER_* keys
+            ctx[key] = f"{pf_.loc[stat, 'value']:.3f}"
+        ctx[f"{key}_CI"] = fmt_ci(pf_.loc[stat, "ci_lo"], pf_.loc[stat, "ci_hi"])
+
+    pv = ph["pooled"]
+    ctx.update({
+        "PV_TRIM_PCT": fmt_pct(config.POSTHOC_TOP_DROP_FRACTION, 0),
+        "PV_TRIM_NREMOVED": fmt_n(pv.loc["top_drop_removed_raw", "n_chains_removed"]),
+        "PV_TRIM_GAP": f"{pv.loc['top_drop_removed_raw', 'gap']:.3f}",
+        "PV_TRIM_CI": fmt_ci(pv.loc["top_drop_removed_raw", "gap_ci_lo"], pv.loc["top_drop_removed_raw", "gap_ci_hi"]),
+        "PV_TRIM_MEAN": f"{pv.loc['per_chain_mean_drop_top_removed', 'gap']:.3f}",
+        "PV_RANK_GAP": f"{pv.loc['all_chains_within_chain_rank', 'gap']:.3f}",
+        "PV_RANK_CI": fmt_ci(pv.loc["all_chains_within_chain_rank", "gap_ci_lo"], pv.loc["all_chains_within_chain_rank", "gap_ci_hi"]),
+        "PV_ALL_CI": fmt_ci(pv.loc["all_chains_raw", "gap_ci_lo"], pv.loc["all_chains_raw", "gap_ci_hi"]),
+    })
+
+    fa = ph["flag_audit"]
+    ex = ph["extreme"]
+    ctx.update({
+        "FA_FLAG_FALLBACK": fmt_n(fa.loc["flagged", "n_fallback"]), "FA_FLAG_N": fmt_n(fa.loc["flagged", "n_chains"]),
+        "FA_UNFLAG_FALLBACK": fmt_n(fa.loc["unflagged", "n_fallback"]), "FA_UNFLAG_N": fmt_n(fa.loc["unflagged", "n_chains"]),
+        "FA_FLAG_MUT": fmt_n(fa.loc["flagged", "n_identity_below_1"]), "FA_UNFLAG_MUT": fmt_n(fa.loc["unflagged", "n_identity_below_1"]),
+        "FA_FLAG_MEANID": fmt_pct(fa.loc["flagged", "mean_identity"], 1),
+        "FA_UNFLAG_MEANID": fmt_pct(fa.loc["unflagged", "mean_identity"], 1),
+        "FA_P": fmt_p(fa["identity_mannwhitney_p"].iloc[0]),
+        "EX_THRESH": f"{config.POSTHOC_LOCAL_RMSD_AUDIT_ANGSTROM:g}",
+        "EX_NRES": fmt_n(ex["n_extreme"].sum()), "EX_NCHAINS": fmt_n(len(ex)),
+        "EX_NRES_FLAGGED": fmt_n(ex.loc[ex["geometrically_flagged"], "n_extreme"].sum()),
+        "EX_NCHAINS_FLAGGED": fmt_n(ex["geometrically_flagged"].sum()),
+        "EX_NCHAINS_SIFTS_EXACT": fmt_n(((ex["mapping_method"] == "sifts") & (ex["mapping_identity"] == 1)).sum()),
+    })
+    return ctx
+
+
 def table_release_years(release_year_path: Path, primary_release: pd.DataFrame) -> str:
     """Leakage flag by PDB release year (all non-redundant representatives),
     plus the release-year composition of the analyzed primary set."""
@@ -1075,7 +1173,8 @@ def build_context() -> dict:
         "FILTER_EXP_SHARE_PCT": fmt_pct(exp_decline / (gap0 - gapmax), 0),
     })
 
-    ctx["RELEASE_YEAR_TABLE"] = table_release_years(INTERIM / "leakage_by_release_year.csv", prov["release"])
+    ctx.update(posthoc_context(load_posthoc(), int(regression.loc["plddt_z", "n"])))
+    ctx["RELEASE_YEAR_TABLE"] =table_release_years(INTERIM / "leakage_by_release_year.csv", prov["release"])
     write_chain_list(prov["primary_labels"], wide, CHAIN_LIST_PATH)
     ctx["CHAIN_LIST_FILE"] = r"\url{paper/supplementary/" + CHAIN_LIST_PATH.name + "}"
     remote = _cmd_output(["git", "remote", "get-url", "origin"], cwd=REPO_ROOT)

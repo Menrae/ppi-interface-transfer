@@ -32,8 +32,9 @@
 \newcommand{\todo}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
 
 \title{\vspace{-1.5em}\textbf{Benchmarking Protein--Protein Interface Prediction on Experimental versus AlphaFold-Predicted Structures}}
-\author{Armeen Shasti-Nazem\\[2pt]\small\todo{affiliation}}
-\date{\small\todo{date}}
+\author{Armeen Shasti-Nazem\\[2pt]\small\todo{affiliation}\\[1pt]
+\small\href{mailto:aashasti@gmail.com}{aashasti@gmail.com}}
+\date{\small Draft of \today}
 
 \begin{document}
 \maketitle
@@ -64,7 +65,8 @@ from 0.254 in the lowest-confidence residues to 0.039 in the
 highest-confidence residues, and a per-residue regression associated both
 AlphaFold confidence (pLDDT) and local structural divergence with how much
 each residue's prediction changed between inputs, independently of one
-another and of solvent exposure. Chain length was not associated with the
+another and of solvent exposure (and, in a post-hoc refit, with
+AlphaFold-input predictions lying further from the true label). Chain length was not associated with the
 size of the drop. These results describe a modest but consistent,
 confidence-linked accuracy cost when applying PeSTo to AlphaFold structures.
 The per-residue cost is largest in lower-confidence regions, where interface
@@ -93,8 +95,9 @@ enough to the true structure that the model's learned decision boundary still
 applies.
 
 That assumption is worth checking directly. AlphaFold reports a per-residue
-confidence score, pLDDT, and its documentation states that residues scoring
-below 70 may have unreliable backbone placement \cite{afdbplddt}. Interface
+confidence score, pLDDT. Its documentation states that a pLDDT above 70
+usually corresponds to a correct backbone prediction, while regions below 50
+are often flexible or intrinsically disordered \cite{afdbplddt}. Interface
 residues are over-represented among low-confidence residues: in the dataset
 analyzed here, the interface base rate is 0.40 among residues
 with pLDDT below 50 versus 0.19 among those at or above 90
@@ -119,12 +122,13 @@ fixed; and (2) is that change associated with AlphaFold's own confidence score
 and with the local geometric divergence between the two structures. Both
 analyses followed written analysis plans fixed before they were run on real
 predictions (Section~\ref{sec:prespec} describes exactly what was fixed when).
-This extends prior experimental-to-predicted transferability work (including
-Yuan et al.'s ESMFold benchmark, and PeSTo's own authors' preliminary
-AlphaFold exploration \todo{confirm and cite where Krapp et al.\ report an
-AlphaFold analysis}) to a controlled, AlphaFold-specific comparison with a
-paired error analysis; it is not the first study to raise this general
-concern.
+PeSTo's authors themselves applied it to 7,464 high-quality human AlphaFold
+DB models, selected by pLDDT and PAE, and reported that agreement with
+predicted yeast complexes improved in higher-quality model regions
+\cite{krapp2023}. This study extends that work and Yuan et al.'s ESMFold
+benchmark to a controlled, AlphaFold-specific comparison on matched
+experimental structures, with a paired error analysis; it is not the first
+study to raise this general concern.
 
 \section{Methods}
 
@@ -313,6 +317,30 @@ original plan's regression outcome (a binary prediction-error indicator,
 modeled by logistic regression) to the continuous prediction shift described
 below, before any error-analysis feature was computed.
 
+\textbf{Post-hoc analyses added after review.} Five further analyses were
+chosen after all of the above results were known, in response to peer
+review (code: \texttt{src/analysis/posthoc\_review.py}). They are
+exploratory, are labeled ``post-hoc'' wherever they appear, and do not
+replace any pre-specified result. (1) \emph{Template window:} each chain's
+PDB release date was compared with its AlphaFold DB model's creation date,
+and the primary endpoint repeated on the chains released on or after that
+date, which cannot have served as templates for their own models. (2)
+\emph{Signed error:} the regression design above was refitted with
+$|p_{\mathrm{AF}} - y| - |p_{\mathrm{exp}} - y|$ as the outcome, where $y$
+is the true label (positive when the AlphaFold-input prediction is further
+from the truth), and $R^2$ is reported for both outcomes. (3) \emph{Paired
+F1 bootstrap} for Section~\ref{sec:filtering}: the change in F1 between the
+smallest and largest pLDDT cutoff, and the change in the
+experimental-vs.-AlphaFold F1 gap, with both cutoffs evaluated on the same
+resampled chains (2,000 resamples). (4) \emph{Pooled vs.\
+per-chain gap:} pooled AUPR recomputed after removing the
+10\% of chains with the largest per-chain drops, and after
+replacing each chain's scores by their within-chain percentile rank, which
+removes differences in score calibration between chains. (5) \emph{Flag
+audit:} mapping method and identity of geometrically flagged vs.\ unflagged
+chains, and a per-chain listing of residues with local RMSD above
+10\,\r{A}.
+
 \textbf{Benchmark (Section~\ref{sec:benchmark}).} Primary and secondary
 endpoints are the paired per-chain difference (experimental minus
 AlphaFold-trimmed) in AUPR and ROC-AUC respectively, restricted to chains
@@ -388,6 +416,20 @@ returns to this. Replacing the distance-based interface label with the
 buried-surface-area label gives essentially the same result (median
 0.026, CI [0.020, 0.034], $p < 10^{-10}$), so the finding is not
 an artifact of the distance-cutoff label definition.
+
+A post-hoc check addressed whether AlphaFold DB could have used a chain's own
+experimental structure as a template. 334 of the 566
+chains were released before their AlphaFold model was generated, so they
+could in principle have been templates for it. This is an upper bound,
+because the template database predates the model. The remaining
+232 chains cannot have been. Among those (229 with
+defined metrics), the median paired AUPR difference was 0.032
+(95\% CI [0.020, 0.047], $p = 6.6\times10^{-8}$), versus 0.022
+(CI [0.016, 0.033], $p = 1.6\times10^{-10}$) among the 325 that could have been. The
+gap is therefore present without any possibility of self-templating. Its
+point estimate is larger in that subgroup, consistent with self-templating
+narrowing the gap where it was possible, but the two subgroups were not
+formally compared.
 
 \begin{figure}[t]
 \centering
@@ -493,8 +535,33 @@ divergence, pLDDT and local RMSD are only mildly collinear here and each
 retains independent explanatory power. Binned by local-RMSD decile, the mean
 absolute prediction shift changes little across the lowest deciles and
 rises over the upper ones, most steeply in the top decile
-(Fig.~\ref{fig:regression}a). The shift measures how much a prediction moves
-between inputs, not whether it moves toward or away from the true label.
+(Fig.~\ref{fig:regression}a). Nearly all residues with extreme local RMSD
+(798 of the 805 residues above 10\,\r{A},
+in 28 of 29 chains) belong to geometrically
+flagged chains, 16 of which were mapped by SIFTS with
+100\% sequence identity to the AlphaFold model. This makes residue-register
+errors an unlikely explanation for most of them, though it does not rule
+them out for individual chains.
+
+The shift measures how much a prediction moves between inputs, not whether
+it moves toward or away from the true label, and the pre-specified
+regression explains only a small part of its variance ($R^2 =
+0.093$). A post-hoc refit with the signed error
+$|p_{\mathrm{AF}} - y| - |p_{\mathrm{exp}} - y|$ as the outcome
+(Table~\ref{tab:regcompare}) separates the two. On average AlphaFold-input
+predictions are slightly further from the true label (mean
+0.018, CI [0.013, 0.024]; further for 53\% of
+residues). Lower pLDDT (coefficient -0.0145, $p = 7.1\times10^{-5}$)
+and higher local RMSD (0.0233, $p = 8.2\times10^{-5}$) are both
+associated with AlphaFold input being further from the truth, not merely
+with a change. Solvent exposure, the strongest correlate of the shift, is not
+associated with the signed error (-0.0012, $p = 0.473$).
+Exposed residues' predictions move more between inputs, but not
+systematically in the wrong direction. This model's $R^2$ is lower still
+(0.024): these covariates identify where errors concentrate, not most of
+the residue-level variation.
+
+
 
 \begin{figure}[t]
 \centering
@@ -528,6 +595,32 @@ Reference category: secondary structure = coil.}
 \label{tab:regression}
 \end{table}
 
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lrrlrrl}
+\toprule
+ & \multicolumn{3}{c}{Shift $|p_{\mathrm{AF}}-p_{\mathrm{exp}}|$} & \multicolumn{3}{c}{Signed error $|p_{\mathrm{AF}}-y|-|p_{\mathrm{exp}}-y|$} \\
+\cmidrule(lr){2-4}\cmidrule(lr){5-7}
+Term & Coef. & $t$ & $p$ & Coef. & $t$ & $p$ \\
+\midrule
+Intercept & 0.1019 & 35.2 & $< 10^{-10}$ & 0.0160 & 7.0 & $< 10^{-10}$ \\
+pLDDT (z) & -0.0268 & -8.1 & $< 10^{-10}$ & -0.0145 & -4.0 & $7.1\times10^{-5}$ \\
+Local RMSD (z) & 0.0268 & 6.1 & $1.4\times10^{-9}$ & 0.0233 & 3.9 & $8.2\times10^{-5}$ \\
+RSA (z) & 0.0254 & 16.0 & $< 10^{-10}$ & -0.0012 & -0.7 & $0.473$ \\
+Helix vs. coil & 0.0115 & 3.3 & $9.8\times10^{-4}$ & 0.0048 & 1.4 & $0.161$ \\
+Strand vs. coil & 0.0073 & 1.7 & $0.081$ & 0.0036 & 0.9 & $0.363$ \\
+\midrule
+$R^2$ & \multicolumn{3}{l}{0.093} & \multicolumn{3}{l}{0.024} \\
+\bottomrule
+\end{tabular}
+\caption{Post-hoc. The regression design of Table~\ref{tab:regression}
+(same 95,117 residues, cluster-robust standard errors by chain) with the
+pre-specified outcome (left) and the signed error (right; positive when the
+AlphaFold-input prediction is further from the true label $y$).}
+\label{tab:regcompare}
+\end{table}
+
 Two pre-specified descriptive analyses addressed possible confounds. First,
 per-chain AUPR drop showed no meaningful association with chain length
 (Spearman $\rho = 0.028$, 95\% CI [-0.054, 0.108], $p = 0.513$). This
@@ -537,11 +630,20 @@ median gap (0.027). The drop distribution is instead
 right-skewed (unweighted mean 0.061 vs.\ median
 0.027), and weighting the mean by chain length barely
 moves it (0.061). A minority of chains with unusually large
-drops pull the mean above the median; long chains in general do not. The
-skew accounts for part of the pooled-vs.-median difference but not all of
-it, since the pooled value also exceeds the mean, and pooled AUPR is a single
-ranking over residues from all chains rather than an average of per-chain
-values. Second, the 92 geometrically flagged chains differ from
+drops pull the mean above the median; long chains in general do not. Two post-hoc checks (Section~\ref{sec:prespec}) apportion the rest of the
+pooled-vs.-median difference. Removing the 55 chains
+(10\%) with the largest per-chain drops roughly halves the pooled
+gap, from 0.070 (CI [0.051, 0.091]) to 0.039 (CI
+[0.024, 0.054]). That remainder still exceeds the remaining chains' mean
+per-chain drop (0.013). Replacing each chain's scores by their
+within-chain ranks, which removes differences in score calibration between
+chains, leaves a pooled gap of 0.055 (CI [0.039, 0.072]). Rank-based
+pooled AUPR is on a different scale from the raw one, so this does not
+measure a calibration share. It does show that the pooled gap is not mainly
+a calibration artifact: it persists when only within-chain rankings are
+compared. The large pooled gap is thus driven substantially, but not
+entirely, by the right tail of per-chain drops. (Removing chains selected
+on their drop is a diagnostic, not an unbiased estimate.) Second, the 92 geometrically flagged chains differ from
 the remaining 462 on every measure in Table~\ref{tab:flagged}
 except interface fraction. Their larger global C$\alpha$ distances follow
 from how the flag is defined, and their larger local RMSD ($p < 10^{-10}$) is closely related.
@@ -551,7 +653,14 @@ confidence: flagged chains have substantially lower mean pLDDT
 AlphaFold-vs-experimental divergence rather than a mapping artifact, though
 it does not rule out the latter for individual chains. Flagged chains are
 also longer, consistent with (but not evidence for) domain rearrangement in
-multi-domain chains.
+multi-domain chains. A post-hoc audit of their residue mappings found them
+only slightly less clean than the unflagged chains. 7 of
+92 flagged chains used the fallback alignment, versus
+19 of 462 unflagged chains;
+24 versus 73 had at least one sequence mismatch.
+Mean mapped identity was 99.6\% versus 99.8\%
+(Mann--Whitney $p = 0.024$). Mapping problems may contribute for a few
+flagged chains but do not characterize the group.
 
 \begin{table}[t]
 \centering
@@ -626,18 +735,21 @@ Filtering at 90 discards 34\%
 of all residues and, importantly, 43\% of the
 true interface residues, while moving AlphaFold-input F1 from
 0.596 (CI [0.571, 0.621]) to 0.603 (CI
-[0.573, 0.633]), an absolute gain of 0.007. We did
-not formally test this change. The marginal CIs overlap, but the two F1
-values are computed on nested, correlated residue sets, so overlapping
-marginal intervals are not a valid test of their difference; a paired
-bootstrap would be required. The experimental-vs.-AlphaFold F1 gap narrows
-from 0.050 without filtering to 0.031 at the strictest
-cutoff (by 39\% of the original gap), but about
+[0.573, 0.633]), an absolute gain of 0.007.
+Because the two F1 values are computed on nested, correlated residue sets,
+their marginal CIs cannot be compared directly; a post-hoc paired bootstrap
+(both cutoffs evaluated on the same resampled chains) gives a 95\% CI of
+[-0.011, 0.024] for this gain, which includes zero. The
+experimental-vs.-AlphaFold F1 gap does narrow, from 0.050 without
+filtering to 0.031 at the strictest cutoff (a change of
+-0.019, paired CI [-0.031, -0.008], i.e.\
+39\% of the original gap). About
 64\% of that narrowing comes from experimental-input F1
-falling by 0.013 (0.647 to 0.634) as its harder,
-lower-pLDDT residues are discarded too, rather than from AlphaFold input
-improving. Filtering thus partly closes the gap in relative terms while
-barely changing AlphaFold-input performance in absolute terms. The
+falling by 0.013 (0.647 to
+0.634; paired CI for the change [-0.028, 0.003]) as its
+harder, lower-pLDDT residues are discarded too, rather than from AlphaFold
+input improving. Filtering thus partly closes the gap between the inputs,
+but it does not detectably improve AlphaFold-input performance itself. The
 composition of the small gain is also informative: AlphaFold-input precision
 rises from 0.673 to 0.713 while
 recall is essentially flat (0.535 to
@@ -693,10 +805,11 @@ effect, not a collapse in accuracy, and Fig.~\ref{fig:phase7primary}a shows
 most chains clustering close to the identity line, with AlphaFold input
 actually scoring higher for 32\% of chains. The pooled-residue
 comparison (0.739 vs.\ 0.669) suggests a larger
-gap. Part of that difference reflects a right-skewed distribution of
-per-chain drops (Section~\ref{sec:error}). Part may reflect that pooled AUPR
-ranks residues from all chains together, so it is also sensitive to how
-PeSTo's scores are calibrated across chains, which we did not separate.
+gap. Post-hoc checks attribute much of that difference to a right-skewed
+minority of chains with large drops: removing the 10\% with the
+largest drops roughly halves it. The remainder reflects pooled AUPR ranking
+residues from all chains together, rather than averaging per-chain values
+(Section~\ref{sec:error}).
 Reporting the per-chain median alongside the pooled number avoids
 overstating the typical case.
 
@@ -717,12 +830,13 @@ pattern: the per-residue cost is largest where AlphaFold itself reports low
 confidence and where the local backbone geometry diverges from the
 experimental structure, and these two signals carry partly independent
 information (low collinearity despite both tracking the same underlying
-divergence). Solvent exposure is, however, the strongest single correlate of
-how much a prediction changes, which is unsurprising for a method whose
-interface calls are made on the protein surface, and it is a reminder that
-the shift is not purely a matter of AlphaFold error. These are associations,
-and the regression's outcome measures prediction instability rather than
-error. Association with a continuous shift is also not the same as a useful
+divergence). A post-hoc refit on the signed error shows that both signals
+also mark where AlphaFold-input predictions move \emph{away} from the true
+label, not merely where they change. Solvent exposure is the strongest
+correlate of how much a prediction changes, which is unsurprising for a
+method whose interface calls are made on the protein surface, but it is not
+associated with the direction of the error. These are associations, and the
+covariates explain only a small fraction of residue-level variation. Association with a continuous shift is also not the same as a useful
 deployment rule. Section~\ref{sec:filtering}'s direct test of the natural
 follow-on idea -- discard low-pLDDT residues before trusting AlphaFold-input
 predictions -- found limited practical benefit at a fixed threshold:
@@ -744,9 +858,12 @@ version v6, created 2022-06-01 to 2025-08-01 according
 to the API metadata). An experimental structure, or a close homolog,
 released before its model was generated could have served as a template for
 that model. That would make the AlphaFold input more similar to the
-experimental structure and bias the measured gap toward zero. The template
-cutoff used for these models is not recorded in the metadata cached by this
-study, and this possibility was not checked here.
+experimental structure and bias the measured gap toward zero. The exact
+template cutoff is not recorded in the cached metadata. The post-hoc check
+in Section~\ref{sec:benchmark} shows the gap is present among the
+232 chains released after their model was generated, which rules
+out self-templating for that subgroup, but not templating on earlier close
+homologs.
 \item \textbf{Temporal and compositional skew.} Leakage filtering removed
 77\% of the non-redundant representatives. The remaining set is,
 by construction, made of proteins dissimilar to PeSTo's training data, and
@@ -776,11 +893,11 @@ change somewhat upon binding, and this study cannot separate that ordinary
 conformational change from AlphaFold-specific structural error. A planned
 comparison against independently solved unbound (apo) structures was not
 run.
-\item \textbf{Shift rather than error.} The regression outcome
-$|p_{\mathrm{AF}} - p_{\mathrm{exp}}|$ measures how much a residue's
-prediction changes between inputs, not whether the AlphaFold-input
-prediction is worse; a shift toward the correct label counts the same as a
-shift away from it.
+\item \textbf{Shift rather than error.} The pre-specified regression
+outcome $|p_{\mathrm{AF}} - p_{\mathrm{exp}}|$ measures how much a
+residue's prediction changes between inputs, not whether the AlphaFold-input
+prediction is worse. The signed-error refit that addresses this is post-hoc,
+and both models have low $R^2$.
 \item \textbf{Deferred comparisons.} The untrimmed, full-length AlphaFold
 model (as opposed to the same model trimmed to the experimentally observed
 range) and the leakage-sensitivity subsets at looser identity thresholds
@@ -834,7 +951,11 @@ repository. \todo{archival snapshot (e.g.\ Zenodo DOI), if desired}
 
 \section*{Acknowledgments}
 
-\todo{acknowledgments and funding}
+\todo{acknowledgments and funding, if any}
+
+\todo{AI-assistance disclosure, if required by the venue: the analysis
+code and parts of this manuscript were developed with an AI coding
+assistant (Claude); confirm or edit this wording}
 
 \bibliographystyle{plain}
 \begin{thebibliography}{99}
@@ -853,10 +974,10 @@ in 2024: providing structure coverage for over 214 million protein sequences.
 \emph{Nucleic Acids Res} \textbf{52}, D368--D375 (2024).
 \url{https://doi.org/10.1093/nar/gkad1011}
 
-\bibitem{afdbplddt} AlphaFold/EMBL-EBI. pLDDT: understanding local
-confidence. AlphaFold online training course.
-\url{https://www.ebi.ac.uk/training/online/courses/alphafold/} \todo{confirm
-exact page URL and access date}
+\bibitem{afdbplddt} EMBL-EBI. pLDDT: understanding local confidence.
+AlphaFold online training course.
+\url{https://www.ebi.ac.uk/training/online/courses/alphafold/inputs-and-outputs/evaluating-alphafolds-predicted-structures-using-confidence-scores/plddt-understanding-local-confidence/}
+(accessed 2026-10-01).
 
 \bibitem{krapp2023} Krapp, L.F., Abriata, L.A., Cort\'es Rodr\'iguez, F.\ et
 al.\ PeSTo: parameter-free geometric deep learning for accurate prediction of
