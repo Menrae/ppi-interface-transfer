@@ -90,15 +90,22 @@ plt.rcParams.update({
 
 
 def fmt_p(p: float) -> str:
+    """The relation and value, for use as "$p @@X@@$" -- e.g. "= 0.012",
+    "= 3.9\\times10^{-16}", or "< 10^{-10}" below
+    config.P_VALUE_REPORTING_FLOOR."""
+    if p < config.P_VALUE_REPORTING_FLOOR:
+        return rf"< 10^{{{int(np.log10(config.P_VALUE_REPORTING_FLOOR))}}}"
     if p < 1e-3:
         exp = int(np.floor(np.log10(p)))
         mant = p / (10 ** exp)
-        return rf"{mant:.1f}\times10^{{{exp}}}"
-    return f"{p:.3f}"
+        return rf"= {mant:.1f}\times10^{{{exp}}}"
+    return f"= {p:.3f}"
 
 
 def fmt_p_dollars(p: float) -> str:
-    return f"${fmt_p(p)}$"
+    """Table-cell form: the value alone (bound kept as "<"), in math mode."""
+    s = fmt_p(p)
+    return f"${s[2:]}$" if s.startswith("= ") else f"${s}$"
 
 
 def fmt_ci(lo: float, hi: float, dec: int = 3) -> str:
@@ -218,7 +225,7 @@ def load_chain_uniprot_acc(pdb_id: str, chain_id: str) -> str:
 
 def fig_attrition_flow(stages: dict, path: Path) -> None:
     labels = ["PDB\nentries", "Candidate\nchains", "Non-redundant\nrepresentatives",
-              "Leakage-free\n(primary set)", "Both structures\ndownloaded", "Residue\nmapping OK",
+              "Leakage-free\ncandidates", "Both structures\ndownloaded", "Residue\nmapping OK",
               "Interface\nlabeled", "PeSTo\npredicted"]
     keys = ["entries", "chains", "clusters", "leakage_free", "structures", "mapped", "labeled", "predicted"]
     values = [stages[k] for k in keys]
@@ -309,12 +316,22 @@ STRATUM_DISPLAY = {
     ("residue_scope", "surface_only"): "Surface residues only",
 }
 
+# The all-residues arm of the residue-scope split is the primary endpoint
+# itself (same chains, same residues, same numbers), so it is shown once, as
+# the primary row, rather than duplicated as a "stratum".
+DUPLICATE_OF_PRIMARY = ("residue_scope", "all_residues")
+
+
+def descriptive_strata(strata: pd.DataFrame) -> pd.DataFrame:
+    keep = ~((strata["stratum"] == DUPLICATE_OF_PRIMARY[0]) & (strata["value"] == DUPLICATE_OF_PRIMARY[1]))
+    return strata[keep]
+
 
 def fig_phase7_strata(phase7: dict, path: Path) -> None:
     primary = phase7["primary"]
-    strata = phase7["strata"]
+    strata = descriptive_strata(phase7["strata"])
 
-    rows = [("Primary endpoint (all chains)", primary["n"], primary["median_diff"], primary["ci_lo"], primary["ci_hi"])]
+    rows = [("Primary endpoint (all chains, all residues)", primary["n"], primary["median_diff"], primary["ci_lo"], primary["ci_hi"])]
     for _, r in strata.iterrows():
         key = (r["stratum"], r["value"])
         rows.append((STRATUM_DISPLAY.get(key, f"{r['stratum']}={r['value']}"), int(r["n"]), r["median_diff"], r["ci_lo"], r["ci_hi"]))
@@ -396,17 +413,32 @@ def fig_phase8_shift_and_regression(features_path: Path, regression: pd.DataFram
     from src.analysis import error_analysis as ea
     rows = []
     for interval, g in df.groupby("rmsd_bin", observed=True):
-        chain_means = g.groupby(["pdb_id", "chain_id"])["prob_shift"].mean().to_numpy()
-        lo, hi = ea.bootstrap_chain_scalar_ci(chain_means, np.mean, config.BOOTSTRAP_N_RESAMPLES, config.PHASE8_BOOTSTRAP_SEED)
-        rows.append({"mid": interval.mid, "mean_shift": g["prob_shift"].mean(), "ci_lo": lo, "ci_hi": hi})
-    binned = pd.DataFrame(rows).sort_values("mid")
+        # CI for the same statistic that is plotted (the residue-level mean
+        # within the decile), resampling chains: per-chain sums and counts
+        # are resampled jointly and the pooled mean recomputed per draw.
+        per_chain = g.groupby(["pdb_id", "chain_id"])["prob_shift"].agg(["sum", "count"])
+        lo, hi = ea.bootstrap_paired_stat_ci(per_chain["sum"].to_numpy(), per_chain["count"].to_numpy(),
+                                             lambda sums, counts: sums.sum() / counts.sum(),
+                                             config.BOOTSTRAP_N_RESAMPLES, config.PHASE8_BOOTSTRAP_SEED)
+        # Plot each decile at its own median local RMSD, not its interval
+        # midpoint: the top decile's interval runs out to the maximum
+        # (tens of Angstrom), so its midpoint sits far from where its
+        # residues actually are.
+        rows.append({"x": g["local_rmsd"].median(), "n": len(g), "mean_shift": g["prob_shift"].mean(),
+                     "ci_lo": lo, "ci_hi": hi})
+    binned = pd.DataFrame(rows).sort_values("x")
 
     fig, axes = plt.subplots(1, 2, figsize=(PAGE_WIDTH_IN, 2.5))
 
     ax = axes[0]
-    ax.plot(binned["mid"], binned["mean_shift"], color=BLUE, linewidth=1.6, marker="o", markersize=3)
-    ax.fill_between(binned["mid"], binned["ci_lo"], binned["ci_hi"], color=BLUE, alpha=0.18, linewidth=0)
-    ax.set_xlabel("Local Cα RMSD (Å), binned")
+    ax.plot(binned["x"], binned["mean_shift"], color=BLUE, linewidth=1.6, marker="o", markersize=3)
+    ax.fill_between(binned["x"], binned["ci_lo"], binned["ci_hi"], color=BLUE, alpha=0.18, linewidth=0)
+    ax.set_xscale("log")
+    from matplotlib.ticker import FixedLocator, NullFormatter, FormatStrFormatter
+    ax.xaxis.set_major_locator(FixedLocator([0.2, 0.5, 1, 2]))
+    ax.xaxis.set_major_formatter(FormatStrFormatter("%g"))
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.set_xlabel("Local Cα RMSD (Å), decile median (log scale)")
     ax.set_ylabel(r"Mean $|p_{\mathrm{AF}} - p_{\mathrm{exp}}|$")
     ax.set_title("(a) Prediction shift vs. local RMSD")
     style_axes(ax)
@@ -419,7 +451,7 @@ def fig_phase8_shift_and_regression(features_path: Path, regression: pd.DataFram
     for y, r in zip(ys, reg.itertuples()):
         lo = r.coef - 1.96 * r.cluster_robust_se
         hi = r.coef + 1.96 * r.cluster_robust_se
-        color = VERMILLION if r.p_value >= 0.05 else BLUE
+        color = GREY if r.p_value >= 0.05 else BLUE
         ax.plot([lo, hi], [y, y], color=color, linewidth=1.6, zorder=1)
         ax.scatter([r.coef], [y], color=color, s=22, zorder=2)
     ax.axvline(0, color="#999999", linewidth=1.0, linestyle="--", zorder=0)
@@ -580,7 +612,8 @@ def fig_plddt_filtering(curve: pd.DataFrame, path: Path) -> None:
 
 def strata_extremes(strata: pd.DataFrame) -> dict:
     """Min/max descriptive-stratum effect, used as prose numbers instead of
-    a redundant table (the forest plot, Fig. 3, already shows all eight)."""
+    a redundant table (the forest plot, Fig. 3, already shows them all)."""
+    strata = descriptive_strata(strata)
     lo_row = strata.loc[strata["median_diff"].idxmin()]
     hi_row = strata.loc[strata["median_diff"].idxmax()]
     return {
@@ -667,17 +700,190 @@ def table_flagged(flagged: pd.DataFrame) -> str:
         "interface_fraction": "Interface fraction", "mean_plddt": "Mean pLDDT",
         "mean_local_rmsd": "Mean local RMSD (\\r{A})", "mean_global_ca_distance": "Mean global C$\\alpha$ dist. (\\r{A})",
     }
+    # Fixed decimals per metric (not significant figures), so each row reads
+    # at one consistent precision.
+    decimals = {"aupr_drop": 3, "chain_length": 0, "interface_fraction": 3, "mean_plddt": 1,
+                "mean_local_rmsd": 2, "mean_global_ca_distance": 2}
     lines = []
     lines.append(r"\begin{tabular}{lrrr}")
     lines.append(r"\toprule")
     lines.append(r"Metric & Flagged mean (median) & Unflagged mean (median) & $p$ \\")
     lines.append(r"\midrule")
     for _, r in flagged.iterrows():
-        lines.append(rf"{disp.get(r['metric'], r['metric'])} & {r['mean_flagged']:.3g} ({r['median_flagged']:.3g}) & "
-                     rf"{r['mean_unflagged']:.3g} ({r['median_unflagged']:.3g}) & {fmt_p_dollars(r['mannwhitney_p'])} \\")
+        d = decimals.get(r["metric"], 3)
+        lines.append(rf"{disp.get(r['metric'], r['metric'])} & {r['mean_flagged']:.{d}f} ({r['median_flagged']:.{d}f}) & "
+                     rf"{r['mean_unflagged']:.{d}f} ({r['median_unflagged']:.{d}f}) & {fmt_p_dollars(r['mannwhitney_p'])} \\")
     lines.append(r"\bottomrule")
     lines.append(r"\end{tabular}")
     return "\n".join(lines)
+
+
+# =============================================================================
+# Provenance, attrition detail, and supplementary material
+# =============================================================================
+
+SUPPLEMENT_DIR = PAPER_DIR / "supplementary"
+CHAIN_LIST_PATH = SUPPLEMENT_DIR / "table_s1_primary_set_chains.csv"
+FETCH_LOG_PATH = config.LOGS_DIR / "fetch_structures.log"
+SIFTS_BULK_PATH = config.RAW_DATA_DIR / "sifts" / "pdb_chain_uniprot.tsv.gz"
+MMSEQS_BIN = config.EXTERNAL_DIR / "mmseqs" / "bin" / "mmseqs"
+PESTO_ROOT = config.EXTERNAL_DIR / "PeSTo"
+TODO = r"\todo{%s}"
+
+
+def _cmd_output(cmd: list[str], cwd: Path | None = None) -> str | None:
+    try:
+        out = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() if out.returncode == 0 and out.stdout.strip() else None
+
+
+def _log_date_range(path: Path, host: str) -> tuple[str, str] | None:
+    """First/last date a request to `host` appears in a run log."""
+    if not path.exists():
+        return None
+    dates = [ln[:10] for ln in path.read_text(errors="replace").splitlines() if host in ln and ln[:4].isdigit()]
+    return (dates[0], dates[-1]) if dates else None
+
+
+def load_provenance() -> dict:
+    import gzip
+    import json
+    from src.models import run_pesto
+
+    prov = {}
+    mm = _cmd_output([str(MMSEQS_BIN), "version"])
+    prov["MMSEQS_VERSION"] = (r"\texttt{" + mm[:7] + "}") if mm else TODO % "MMseqs2 version"
+    pesto_commit = _cmd_output(["git", "rev-parse", "HEAD"], cwd=PESTO_ROOT)
+    prov["PESTO_COMMIT"] = (r"\texttt{" + pesto_commit[:7] + "}") if pesto_commit else TODO % "PeSTo commit"
+    prov["PESTO_CHECKPOINT"] = r"\texttt{" + run_pesto.PESTO_CHECKPOINT_DIR.name.replace("_", r"\_") + "}"
+
+    af_dates = _log_date_range(FETCH_LOG_PATH, "alphafold.ebi.ac.uk")
+    pdbe_dates = _log_date_range(FETCH_LOG_PATH, "www.ebi.ac.uk:443 \"GET /pdbe")
+    fmt_range = lambda r: (r[0] if r[0] == r[1] else f"{r[0]} to {r[1]}")
+    prov["AF_DOWNLOAD_DATE"] = fmt_range(af_dates) if af_dates else TODO % "AlphaFold DB download date"
+    prov["PDBE_DOWNLOAD_DATE"] = fmt_range(pdbe_dates) if pdbe_dates else TODO % "PDBe download date"
+    sifts_header = None
+    if SIFTS_BULK_PATH.exists():
+        with gzip.open(SIFTS_BULK_PATH, "rt") as f:
+            first = f.readline().strip()
+        if first.startswith("#"):
+            sifts_header = " ".join(first.lstrip("# ").split()).replace(" | ", "; ")
+    prov["SIFTS_BULK_RELEASE"] = sifts_header if sifts_header else TODO % "SIFTS bulk-file release"
+
+    # AlphaFold DB model metadata for the analyzed chains, from the cached
+    # prediction-API responses Phase 3 used.
+    labels = pd.read_csv(INTERIM / "labels_report.csv")
+    primary = labels[(labels["status"] == "labeled") & labels["eligible_homolog"]]
+    fetch = pd.read_csv(INTERIM / "fetch_report.csv")
+    merged = primary.merge(fetch[["pdb_id", "chain_id", "release_date", "alphafold_model_version"]],
+                           on=["pdb_id", "chain_id"], how="left")
+    versions = sorted({int(v) for v in merged["alphafold_model_version"].dropna()})
+    tools, created = set(), []
+    for acc in primary["uniprot_acc"].unique():
+        path = config.RAW_DATA_DIR / "alphafold" / "api" / f"{acc}.json"
+        if not path.exists():
+            continue
+        for entry in json.loads(path.read_text()).get("body") or []:
+            if entry.get("uniprotAccession") == acc:
+                tools.add(entry.get("toolUsed", ""))
+                if entry.get("modelCreatedDate"):
+                    created.append(entry["modelCreatedDate"][:10])
+    prov["AF_MODEL_VERSIONS"] = ", ".join(f"v{v}" for v in versions)
+    prov["AF_TOOL_USED"] = "; ".join(sorted(t for t in tools if t)) or TODO % "AlphaFold DB toolUsed"
+    prov["AF_MODEL_CREATED_RANGE"] = (f"{min(created)}" if min(created) == max(created)
+                                     else f"{min(created)} to {max(created)}") if created else TODO % "model dates"
+    prov["PRIMARY_RELEASE_RANGE"] = f"{merged['release_date'].min()} to {merged['release_date'].max()}"
+
+    # Attrition detail, leakage-free ("homolog") candidates only.
+    f_h = fetch[fetch["eligible_homolog"]]
+    af_fail = f_h["alphafold_failure_reason"].value_counts()
+    prov["N_AF_ABSENT"] = fmt_n(af_fail.get("accession_absent_from_alphafold_db", 0))
+    prov["N_AF_FRAGMENTED"] = fmt_n(af_fail.get("fragmented_in_alphafold_db", 0))
+    prov["N_AF_SEQ_MISMATCH"] = fmt_n(af_fail.get("sequence_mismatch", 0))
+    assert af_fail.sum() == len(f_h) - f_h["alphafold_failure_reason"].isna().sum()
+
+    mapping = pd.read_csv(INTERIM / "mapping_report.csv")
+    m_h = mapping[mapping["eligible_homolog"]]
+    reasons = m_h["exclusion_reason"].fillna("")
+    n_nonofficial = int(reasons.str.startswith("alphafold_model_not_official_afdb").sum())
+    n_coverage = int(reasons.str.startswith("coverage_below_threshold").sum())
+    n_validation = int(reasons.str.startswith("fallback_failed_validation").sum())
+    assert n_nonofficial + n_coverage + n_validation == int((m_h["status"] != "mapped").sum())
+    prov["N_NONOFFICIAL_AF"] = fmt_n(n_nonofficial)
+    nonofficial_providers = sorted({r.split("providerId=")[-1] for r in reasons if "providerId=" in r})
+    prov["NONOFFICIAL_PROVIDERS"] = ", ".join(nonofficial_providers)
+    prov["N_COVERAGE_EXCL"] = fmt_n(n_coverage)
+    prov["N_VALIDATION_EXCL"] = fmt_n(n_validation)
+    prov["MIN_MAPPED_COVERAGE"] = fmt_pct(config.MIN_MAPPED_COVERAGE, 0)
+
+    m_final = primary[["pdb_id", "chain_id"]].merge(m_h, on=["pdb_id", "chain_id"], how="left")
+    prov["N_SIFTS_MAPPED"] = fmt_n((m_final["method"] == "sifts").sum())
+    prov["N_FALLBACK_MAPPED"] = fmt_n((m_final["method"] == "fallback").sum())
+    prov["N_NONIDENTICAL"] = fmt_n((m_final["identity"] < 1).sum())
+    prov["MIN_MAPPED_IDENTITY"] = fmt_pct(m_final["identity"].min(), 0)
+
+    l_h = labels[labels["eligible_homolog"]]
+    l_excl = l_h["exclusion_reason"].value_counts()
+    prov["N_NO_PARTNER"] = fmt_n(l_excl.get("no_protein_partner_in_assembly", 0))
+    prov["N_ZERO_INTERFACE"] = fmt_n(l_excl.get("zero_interface_residues", 0))
+    prov["N_LABEL_EXCL"] = fmt_n((l_h["status"] != "labeled").sum())
+    assert l_excl.sum() == (l_h["status"] != "labeled").sum()
+
+    import inspect
+    import biotite
+    from biotite.structure import sasa as biotite_sasa
+    sasa_defaults = inspect.signature(biotite_sasa).parameters  # interface_labels.py uses these defaults
+    prov["BIOTITE_VERSION"] = biotite.__version__
+    prov["SASA_PROBE"] = f"{sasa_defaults['probe_radius'].default:g}"
+    prov["SASA_POINTS"] = fmt_n(sasa_defaults["point_number"].default)
+    pymol_meta = sorted((config.EXTERNAL_DIR / "pymol_render_env" / "conda-meta").glob("pymol-open-source-*.json"))
+    prov["PYMOL_VERSION"] = (pymol_meta[0].name.split("-")[3]) if pymol_meta else TODO % "PyMOL version"
+
+    prov["GEO_FAR"] =f"{config.GEOMETRIC_FLAG_FAR_DISTANCE_ANGSTROM:g}"
+    prov["GEO_RUN"] = f"{config.GEOMETRIC_FLAG_MIN_RUN_LENGTH}"
+    prov["CLUSTER_MIN_COVERAGE"] = fmt_pct(config.CLUSTER_MIN_COVERAGE, 0)
+    prov["SURFACE_RSA_THRESHOLD"] = f"{config.SURFACE_RSA_THRESHOLD:g}"
+    prov["LOCAL_RMSD_MIN_NEIGHBORS"] = f"{config.LOCAL_RMSD_MIN_NEIGHBORS}"
+    prov["P_FLOOR"] = rf"10^{{{int(np.log10(config.P_VALUE_REPORTING_FLOOR))}}}"
+    prov["INTERFACE_FRACTION_THRESHOLD"] = f"{config.INTERFACE_FRACTION_STRATUM_THRESHOLD:g}"
+    prov["PHASE7_SEED"] = f"{config.PHASE7_BOOTSTRAP_SEED}"
+    prov["PHASE8_SEED"] = f"{config.PHASE8_BOOTSTRAP_SEED}"
+    return {"ctx": prov, "primary_labels": primary, "release": merged}
+
+
+def table_release_years(release_year_path: Path, primary_release: pd.DataFrame) -> str:
+    """Leakage flag by PDB release year (all non-redundant representatives),
+    plus the release-year composition of the analyzed primary set."""
+    ry = pd.read_csv(release_year_path)
+    analyzed = pd.to_datetime(primary_release["release_date"]).dt.year.value_counts()
+    lines = [r"\begin{tabular}{lrrrr}", r"\toprule",
+             r"Release year & Representatives & Leakage-free & \% flagged & Analyzed (primary set) \\", r"\midrule"]
+    for _, r in ry.iterrows():
+        y = int(r["release_year"])
+        lines.append(rf"{y} & {fmt_n(r['n_representatives'])} & {fmt_n(r['n_survive_primary_union_30pct'])} & "
+                     rf"{r['pct_flagged_primary_union_30pct']:.1f} & {fmt_n(analyzed.get(y, 0))} \\")
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    return "\n".join(lines)
+
+
+def write_chain_list(primary: pd.DataFrame, per_chain_wide: pd.DataFrame, path: Path) -> None:
+    """Supplementary Table S1: every analyzed chain, with whether it enters
+    the per-chain (paired) analyses or only the pooled/residue-level ones."""
+    geo = pd.read_csv(INTERIM / "phase4_geometric_validation.csv")
+    geo["geometrically_flagged"] = geo["status"].eq("validated") & (
+        geo["longest_far_run"] >= config.GEOMETRIC_FLAG_MIN_RUN_LENGTH)
+    mapping = pd.read_csv(INTERIM / "mapping_report.csv")[["pdb_id", "chain_id", "method", "identity"]]
+    out = primary[["pdb_id", "chain_id", "uniprot_acc", "assembly_id", "n_observed",
+                   "interface_fraction_distance", "has_homomeric_partner"]].merge(
+        mapping, on=["pdb_id", "chain_id"], how="left").merge(
+        geo[["pdb_id", "chain_id", "geometrically_flagged"]], on=["pdb_id", "chain_id"], how="left").merge(
+        per_chain_wide[["pdb_id", "chain_id", "aupr_exp", "aupr_af_trimmed"]], on=["pdb_id", "chain_id"], how="left")
+    out["in_per_chain_analyses"] = out["aupr_exp"].notna()
+    out = out.rename(columns={"method": "mapping_method", "identity": "mapping_identity"})
+    path.parent.mkdir(parents=True, exist_ok=True)
+    out.sort_values(["pdb_id", "chain_id"]).to_csv(path, index=False)
 
 
 # =============================================================================
@@ -745,10 +951,10 @@ def build_context() -> dict:
 
     ctx.update({
         "PRIMARY_N": fmt_n(primary["n"]), "PRIMARY_MEDIAN": f"{primary['median_diff']:.3f}",
-        "PRIMARY_CI": fmt_ci(primary["ci_lo"], primary["ci_hi"]), "PRIMARY_P": fmt_p_dollars(primary["p_value"]),
-        "ROC_MEDIAN": f"{roc['median_diff']:.3f}", "ROC_CI": fmt_ci(roc["ci_lo"], roc["ci_hi"]), "ROC_P": fmt_p_dollars(roc["p_value"]),
+        "PRIMARY_CI": fmt_ci(primary["ci_lo"], primary["ci_hi"]), "PRIMARY_P": fmt_p(primary["p_value"]),
+        "ROC_MEDIAN": f"{roc['median_diff']:.3f}", "ROC_CI": fmt_ci(roc["ci_lo"], roc["ci_hi"]), "ROC_P": fmt_p(roc["p_value"]),
         "ROBUST_MEDIAN": f"{robustness['median_diff']:.3f}", "ROBUST_CI": fmt_ci(robustness["ci_lo"], robustness["ci_hi"]),
-        "ROBUST_P": fmt_p_dollars(robustness["p_value"]),
+        "ROBUST_P": fmt_p(robustness["p_value"]),
         "POOLED_AUPR_EXP": f"{pooled_exp['aupr']:.3f}", "POOLED_AUPR_AF": f"{pooled_af['aupr']:.3f}",
         "POOLED_ROC_EXP": f"{pooled_exp['roc_auc']:.3f}", "POOLED_ROC_AF": f"{pooled_af['roc_auc']:.3f}",
         "POOLED_N": fmt_n(pooled_exp["n"]), "POOLED_BASE_RATE": f"{pooled_exp['base_rate']:.3f}",
@@ -768,17 +974,19 @@ def build_context() -> dict:
         "REGRESSION_TABLE": table_regression(phase8["regression"]),
         "REG_N": fmt_n(regression.loc["plddt_z", "n"]), "REG_CLUSTERS": fmt_n(regression.loc["plddt_z", "n_clusters"]),
         "REG_N_DROPPED": fmt_n(pooled_exp["n"] - regression.loc["plddt_z", "n"]),
-        "PLDDT_COEF": f"{regression.loc['plddt_z','coef']:.4f}", "PLDDT_P": fmt_p_dollars(regression.loc["plddt_z", "p_value"]),
-        "RMSD_COEF": f"{regression.loc['local_rmsd_z','coef']:.4f}", "RMSD_P": fmt_p_dollars(regression.loc["local_rmsd_z", "p_value"]),
-        "RSA_COEF": f"{regression.loc['rsa_z','coef']:.4f}", "RSA_P": fmt_p_dollars(regression.loc["rsa_z", "p_value"]),
+        "PLDDT_COEF": f"{regression.loc['plddt_z','coef']:.4f}", "PLDDT_P": fmt_p(regression.loc["plddt_z", "p_value"]),
+        "RMSD_COEF": f"{regression.loc['local_rmsd_z','coef']:.4f}", "RMSD_P": fmt_p(regression.loc["local_rmsd_z", "p_value"]),
+        "RSA_COEF": f"{regression.loc['rsa_z','coef']:.4f}", "RSA_P": fmt_p(regression.loc["rsa_z", "p_value"]),
         "MAX_VIF": f"{phase8['regression']['vif'].max(skipna=True):.2f}",
-        "RHO": f"{rho_row['value']:.3f}", "RHO_CI": fmt_ci(rho_row["ci_lo"], rho_row["ci_hi"]), "RHO_P": f"{rho_row['p_value']:.2f}",
+        "PLDDT_T": f"{abs(regression.loc['plddt_z', 't']):.1f}", "RMSD_T": f"{abs(regression.loc['local_rmsd_z', 't']):.1f}",
+        "RSA_T": f"{regression.loc['rsa_z', 't']:.1f}",
+        "RHO": f"{rho_row['value']:.3f}", "RHO_CI": fmt_ci(rho_row["ci_lo"], rho_row["ci_hi"]), "RHO_P": fmt_p(rho_row["p_value"]),
         "UNWEIGHTED_MEAN_DROP": f"{unweighted_mean:.3f}", "UNWEIGHTED_MEDIAN_DROP": f"{unweighted_median:.3f}",
         "WEIGHTED_MEAN_DROP": f"{weighted_mean:.3f}",
         "FLAGGED_TABLE": table_flagged(phase8["flagged"]),
         "FLAGGED_N": fmt_n(flagged.loc["aupr_drop", "n_flagged"]), "UNFLAGGED_N": fmt_n(flagged.loc["aupr_drop", "n_unflagged"]),
-        "FLAGGED_PLDDT_P": fmt_p_dollars(flagged.loc["mean_plddt", "mannwhitney_p"]),
-        "FLAGGED_RMSD_P": fmt_p_dollars(flagged.loc["mean_local_rmsd", "mannwhitney_p"]),
+        "FLAGGED_PLDDT_P": fmt_p(flagged.loc["mean_plddt", "mannwhitney_p"]),
+        "FLAGGED_RMSD_P": fmt_p(flagged.loc["mean_local_rmsd", "mannwhitney_p"]),
     })
 
     if example_info["rendered_externally"]:
@@ -786,9 +994,9 @@ def build_context() -> dict:
         ex_render_note = (
             "rendered with PyMOL (cartoon representation), not a C$\\alpha$ trace; "
             "the AlphaFold model in (c) is Kabsch-superposed onto the experimental "
-            "structure and all three panels share one camera orientation -- see "
-            "scripts/render\\_example\\_chain.py and the accompanying repository's "
-            "README.md for how this image was produced"
+            "structure and all three panels share one camera orientation; "
+            "produced by scripts/render\\_example\\_chain.py, see Code and Data "
+            "Availability"
         )
     else:
         ex_figure_file = "figures/fig6_structure_example.png"
@@ -832,6 +1040,46 @@ def build_context() -> dict:
         "FILTER_FRAC_POS_DISCARDED_MAX": fmt_pct(1 - f1_af_max["frac_positives_kept"], 0),
     })
 
+    # --- Additions for the review-1 revision --------------------------------
+    prov = load_provenance()
+    ctx.update(prov["ctx"])
+
+    wide = phase7["per_chain_wide"]
+    n_af_better = int((wide["drop"] < 0).sum())
+    n_tie = int((wide["drop"] == 0).sum())
+    pc = pd.read_csv(BENCHMARK_DIR / "per_chain_metrics.csv")
+    pc = pc[(pc["label"] == "is_interface_contact") & (pc["input"] == "exp")]
+    excluded = pc[pc["aupr"].isna()]
+    assert len(excluded) == phase7["n_excluded"]
+    ctx.update({
+        "N_AF_BETTER": fmt_n(n_af_better), "PCT_AF_BETTER": fmt_pct(n_af_better / len(wide), 0),
+        "N_TIE": fmt_n(n_tie), "N_EXP_BETTER": fmt_n(len(wide) - n_af_better - n_tie),
+        "EXCL_RES": fmt_n(excluded["n"].sum()),
+        "EXCL_RES_PCT": fmt_pct(excluded["n"].sum() / pooled_exp["n"], 1),
+        "EXCL_MIN_N": fmt_n(excluded["n"].min()), "EXCL_MAX_N": fmt_n(excluded["n"].max()),
+        "N_DESCRIPTIVE_SUBGROUPS": fmt_n(len(descriptive_strata(phase7["strata"]))),
+    })
+
+    def base_rate(b):
+        return float(band[band["band"] == b]["base_rate"].iloc[0])
+
+    ctx.update({"BASE_RATE_LOW": f"{base_rate('<50'):.2f}", "BASE_RATE_HIGH": f"{base_rate('>=90'):.2f}",
+                "FRAC_POS_HIGH_BAND": fmt_pct(f1_af_max["frac_positives_kept"], 0)})
+
+    gap0 = f1_exp_0["f1"] - f1_af_0["f1"]
+    gapmax = f1_exp_max["f1"] - f1_af_max["f1"]
+    exp_decline = f1_exp_0["f1"] - f1_exp_max["f1"]
+    ctx.update({
+        "FILTER_GAP_NARROW_PCT": fmt_pct((gap0 - gapmax) / gap0, 0),
+        "FILTER_EXP_DECLINE": f"{exp_decline:.3f}",
+        "FILTER_EXP_SHARE_PCT": fmt_pct(exp_decline / (gap0 - gapmax), 0),
+    })
+
+    ctx["RELEASE_YEAR_TABLE"] = table_release_years(INTERIM / "leakage_by_release_year.csv", prov["release"])
+    write_chain_list(prov["primary_labels"], wide, CHAIN_LIST_PATH)
+    ctx["CHAIN_LIST_FILE"] = r"\url{paper/supplementary/" + CHAIN_LIST_PATH.name + "}"
+    remote = _cmd_output(["git", "remote", "get-url", "origin"], cwd=REPO_ROOT)
+    ctx["REPO_URL"] = (r"\url{" + remote.removesuffix(".git") + "}") if remote else TODO % "repository URL"
     return ctx
 
 
